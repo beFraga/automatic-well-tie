@@ -1,0 +1,11 @@
+dual_task:
+  learning_rate: 0.001
+  batch_size: 64
+  max_epochs: 100
+  lr_decay_every_n_epoch: 40
+  lr_decay_rate: 0.5
+  qt_seismic_distortions: 10
+  train_sample: 10000
+  loss:
+    alpha: 0.015
+    beta: 0.01
