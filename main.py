@@ -28,12 +28,11 @@ SAVE_DIR = WORKDIR / "training"
 def main():
     start_time = time.time()
     print("----- Starting DualTaskAE Train -----")
-    seismicDataset = seismic_dataset_generator() # TODO: passar argumentos corretos
+    seismicDataset = seismic_dataset_generator(LOGS_PATH, SEGY_FILE, dual_task_params['train_sample']) # TODO: passar argumentos corretos: lasdir, syfile, size_train
     train_seis_data, val_seis_data, test_seis_data = seismicDataset.get_loaders()
     dualTask = DualModel(SAVE_DIR,
-                         train_seis_data,
-                         val_seis_data,
-                         parameters,
+                         seismicDataset,
+                         dual_task_params,
                          device=device)
 
     dualTask.train()
@@ -44,6 +43,7 @@ def main():
     start_time = time.time()
     print("----- Starting TimeShiftPredictor Train -----")
     
+    # timeshit ainda não funciona como deveria
     _, w = dualTask.net() #TODO: passar args corretos
     tsDataset = timeshift_dataset_generator() #TODO: passar args corretos
     train_ts_data, val_ts_data, test_ts_data = tsDataset.get_loaders()
@@ -57,6 +57,9 @@ def main():
     print("Total training time (TimeShiftPredictor):")
     print(time.time() - start_time)
 
+def runBoth():
+    print("NOT IMPLEMENTED YET")
+    pass
 
 def trainDT():
     start_time = time.time()
@@ -75,6 +78,10 @@ def trainDT():
     print("Loss total (DualTask):")
     print(dualTask.history["train_loss_total"])
 
+def trainTS():
+    print("NOT IMPLEMENTED YET")
+    pass
+
 def runDT():
     start_time = time.time()
     print("----- Starting DualTaskAE Test -----")
@@ -85,6 +92,10 @@ def runDT():
     dualTask.load_network(dualTask.save_dir / dualTask.state_dict)
     results = dualTask.run_test()
     plotar_amostras_como_curvas(results["s"], results["s_syn"], results["w"])
+
+def runTS():
+    print("NOT IMPLEMENTED YET")
+    pass
     
 
     
@@ -102,8 +113,12 @@ if __name__ == "__main__":
     if i == 1:
         sys.exit(main())
     elif i == 2:
-        pass
+        sys.exit(runBoth)
     elif i == 3:
         sys.exit(trainDT())
+    elif i ==4:
+        sys.exit(trainTS())
     elif i == 5:
         sys.exit(runDT())
+    elif i == 6:
+        sys.exit(runTS())
