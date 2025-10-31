@@ -60,7 +60,7 @@ class BaseModel:
         
         for e in tqdm(range(self.start_epoch, self.max_epochs)):
             self.train_one_epoch()
-            current_val_loss = self.validate_training()
+            # current_val_loss = self.validate_training()
 
             if self.schedulers:
                 for sche in self.schedulers:
@@ -186,6 +186,7 @@ class DualModel(BaseModel):
         print(result["s"].shape)
         result["s_syn"] = np.concatenate(result["s_syn"], axis=0)
         result["w"] = np.concatenate(result["w"], axis=0)
+        print(result['w'].shape)
         return result
 
 
