@@ -124,6 +124,10 @@ class DualModel(BaseModel):
             count_loop += 1
             self.optimizer.zero_grad()
 
+            # Move tensores para a GPU
+            s = s.to(self.device)
+            s_noise = s_noise.to(self.device)
+
             s_syn, w = self.net(s_noise)
 
             loss = self.loss(s, s_syn, w)
@@ -165,6 +169,10 @@ class DualModel(BaseModel):
         result = {"s": [], "s_syn": [], "w": []}
         with torch.no_grad():
             for s, s_noise in self.test_dataset:
+                # Move tensores para a GPU
+                s = s.to(self.device)
+                s_noise = s_noise.to(self.device)
+
                 s_syn, w = self.net(s_noise)
                 result["s_syn"].append(np.squeeze(s_syn))
                 result["w"].append(np.squeeze(w))
@@ -216,6 +224,11 @@ class TimeShiftModel(BaseModel):
             count_loop += 1
             self.optimizer.zero_grad()
 
+            # Move tensores para a GPU
+            s = s.to(self.device)
+            s_syn = s_syn.to(self.device)
+            ts = ts.to(self.device)
+
             ts_syn = self.net(s, s_syn)
 
             loss = self.loss(ts, ts_syn)
@@ -239,6 +252,11 @@ class TimeShiftModel(BaseModel):
             self.net.eval()
             for s, s_syn, ts in self.val_dataset:
                 count_loop += 1
+
+                # Move tensores para a GPU
+                s = s.to(self.device)
+                s_syn = s_syn.to(self.device)
+                ts = ts.to(self.device)
 
                 ts_syn = self.net(s, s_syn)
 
