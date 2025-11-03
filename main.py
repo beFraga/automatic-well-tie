@@ -114,7 +114,7 @@ if __name__ == "__main__":
     if i == 1:
         sys.exit(main())
     elif i == 2:
-        sys.exit(runBoth)
+        sys.exit(runBoth())
     elif i == 3:
         sys.exit(trainDT())
     elif i == 4:
