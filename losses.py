@@ -11,7 +11,7 @@ class BaseLoss(object):
             raise NotImplementedError("The key `total` must be present for backdrop")
 
 class DualTaskLoss(BaseLoss):
-    key_names = ('total', 'reconstruction', 'spectral') # normalization
+    key_names = ('total', 'reconstruction', 'spectral', 'normalization', 'smooth')
 
     def __init__(self, parameters):
         self.key_names = DualTaskLoss.key_names
@@ -19,22 +19,26 @@ class DualTaskLoss(BaseLoss):
 
         self.alpha = parameters['alpha']
         self.beta = parameters['beta']
+        self.gamma = parameters['gamma']
 
     def __call__(self, s, s_rec, w):
-        loss_reconstruction = torch.linalg.norm(s - s_rec) ** 2 # ||s - s'|| ^ 2
+        loss_reconstruction = torch.mean((s - s_rec) ** 2) # ||s - s'|| ^ 2
 
         loss_spectral = self.spectral_loss(w, s) # alpha * ||F(w') - F(s)|| ^ 2
 
 
-#        loss_norm = self.beta * torch.abs(torch.linalg.norm(w) - 1) # beta * | ||w'|| - 1 |
+        loss_norm = self.beta * torch.abs(torch.linalg.norm(w) - 1) # beta * | ||w'|| - 1 |
 
-        loss_total = loss_reconstruction + loss_spectral
+        loss_smooth = self.gamma * torch.mean((w[:,:,1:] - w[:,:,:-1]) ** 2) # gamma * sum(w_i - w_i-1) ^ 2
+
+        loss_total = loss_reconstruction + loss_spectral + loss_norm + loss_smooth
 
         loss = {
                 'total': loss_total,
                 'reconstruction': loss_reconstruction,
                 'spectral': loss_spectral,
-#                'normalization': loss_norm
+                'normalization': loss_norm,
+                'smooth': loss_smooth
                }
         
         return loss
@@ -59,7 +63,8 @@ class DualTaskLoss(BaseLoss):
             ).squeeze(1)
 
         # loss espectral: ||F(w') - F(s)|| ^ 2
-        loss = torch.linalg.norm(torch.abs(torch.abs(Wp)**2 - torch.abs(Sp)**2))
+        #loss = torch.linalg.norm(torch.abs(torch.abs(Wp)**2 - torch.abs(Sp)**2))
+        loss = torch.mean((Wp - Sp) ** 2)
 
         return self.alpha * loss
 

@@ -27,11 +27,11 @@ class DualTaskAE(nn.Module):
         )
 
         self.wavelet_branch = nn.Sequential(
-            nn.Conv1d(latent_filters, wavelet_filters, kernel_size=kernel_size, stride=1, padding=1),
+            nn.Conv1d(latent_filters, wavelet_filters, kernel_size=5, stride=1, padding=2),
             nn.ReLU(inplace=True),
-            nn.Conv1d(wavelet_filters, wavelet_filters, kernel_size=kernel_size, stride=1, padding=1),
+            nn.Conv1d(wavelet_filters, wavelet_filters, kernel_size=5, stride=1, padding=2),
             nn.ReLU(inplace=True),
-            nn.Conv1d(wavelet_filters, 1, kernel_size=kernel_size, stride=1, padding=1)
+            nn.Conv1d(wavelet_filters, 1, kernel_size=5, stride=1, padding=2)
         )
 
     def forward(self, s_noyse):
