@@ -174,9 +174,10 @@ class DualModel(BaseModel):
                 s_noise = s_noise.to(self.device)
 
                 s_syn, w = self.net(s_noise)
-                result["s_syn"].append(np.squeeze(s_syn))
-                result["w"].append(np.squeeze(w))
-                result["s"].append(np.squeeze(s))
+                result["s_syn"].append(np.squeeze(s_syn.detach().cpu().numpy()))
+                result["w"].append(np.squeeze(w.detach().cpu().numpy()))
+                result["s"].append(np.squeeze(s.detach().cpu().numpy()))
+
         result["s"] = np.concatenate(result["s"], axis=0)
         print(result["s"].shape)
         result["s_syn"] = np.concatenate(result["s_syn"], axis=0)
