@@ -4,8 +4,9 @@ import time, pickle
 import numpy as np
 from tqdm import tqdm
 
-from network import DualTaskAE, TimeShiftPredictor
-from losses import DualTaskLoss, TimeShiftLoss
+from network import DualTaskAE, TimeShiftPredictor, MLPWaveletExtractor, SeisAE, WaveletDecoder
+from losses import DualTaskLoss, TimeShiftLoss, MLPLoss, SeisAELoss, WaveletDecoderLoss
+from geophysics import extract_seismic
 
 class BaseModel:
 
@@ -104,7 +105,7 @@ class DualModel(BaseModel):
         self.net = DualTaskAE()
         self.net.to(self.device)
 
-        self.loss = DualTaskLoss(self.params['loss'])
+        self.loss = DualTaskLoss(parameters['loss'])
 
         self.optimizer = torch.optim.Adam(params=self.net.parameters(), lr=self.learning_rate)
 
@@ -190,6 +191,263 @@ class DualModel(BaseModel):
         return result
 
 
+class SeisAEModel(BaseModel):
+
+
+    def __init__(self, save_dir,
+                       dataset,
+                       parameters,
+                       device = None):
+
+        super().__init__(save_dir,
+                         dataset,
+                         parameters,
+                         device = device)
+        
+        self.state_dict = "seisaemodel_state_dict.pt"
+        self.history_file = "seisaemodel_history.pkl"
+        self.net = SeisAE()
+        self.net.to(self.device)
+
+        self.loss = SeisAELoss()
+
+        self.optimizer = torch.optim.Adam(params=self.net.parameters(), lr=self.learning_rate)
+
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer,
+                                                       parameters['lr_decay_every_n_epoch'],
+                                                       gamma=parameters['lr_decay_rate'])
+        self.schedulers = [lr_scheduler]
+
+        self.history = {}
+        for key in self.loss.key_names:
+            self.history['train_loss_' + key] = []
+            self.history['val_loss_' + key] = []
+
+
+    def train_one_epoch(self):
+        self.net.train()
+
+        loss_numerics = {}
+        for key in self.loss.key_names:
+            loss_numerics[key] = 0.0
+
+        count_loop = 0
+        for s, s_noise in self.train_dataset:
+            count_loop += 1
+            self.optimizer.zero_grad()
+
+            s_syn = self.net(s_noise)
+
+            loss = self.loss(s, s_syn)
+            loss['total'].backward()
+            self.optimizer.step()
+
+            for key in self.loss.key_names:
+                loss_numerics[key] += loss[key].item()
+
+        for key in self.loss.key_names:
+            _avg_numeric_loss = loss_numerics[key] / count_loop
+            self.history['train_loss_' + key].append(_avg_numeric_loss)
+    
+
+    def validate_training(self):
+        loss_numerics = {}
+        for key in self.loss.key_names:
+            loss_numerics[key] = 0.0
+
+        count_loop = 0
+        with torch.no_grad():
+            self.net.eval()
+            for s, s_noise in self.val_dataset:
+                count_loop += 1
+
+                s_syn = self.net(s_noise)
+
+                loss = self.loss(s, s_syn)
+
+                for key in self.loss.key_names:
+                    loss_numerics[key] += loss[key].item()
+
+            for key in self.loss.key_names:
+                _avg_numeric_loss = loss_numerics[key] / count_loop
+                self.history['train_loss_' + key].append(_avg_numeric_loss)
+
+        return loss_numerics['total'] / count_loop
+
+    
+    def run_test(self):
+        result = {
+            "s": [],
+            "s_syn": [],
+        }
+        with torch.no_grad():
+            for s, s_noise in self.test_dataset:
+                s_syn = self.net(s_noise)
+                result["s_syn"].append(np.squeeze(s_syn))
+                result["s"].append(np.squeeze(s_noise))
+        result["s"] = np.concatenate(result["s"], axis=0)
+        result["s_syn"] = np.concatenate(result["s_syn"], axis=0)
+        return result
+    
+    
+    def encode(self, s):
+        return self.net.encode(s)
+
+
+class WaveletDecoderModel(BaseModel):
+
+
+    def __init__(self, save_dir,
+                       dataset,
+                       parameters,
+                       device = None):
+
+        super().__init__(save_dir,
+                         dataset,
+                         parameters,
+                         device = device)
+        
+        self.state_dict = "wavelet_decoder_state_dict.pt"
+        self.history_file = "wavelet_decoder_history.pkl"
+        self.net = WaveletDecoder()
+        self.net.to(self.device)
+
+        self.split_epoch = int(0.2 * self.max_epochs)
+
+        self.loss = WaveletDecoderLoss(parameters['loss'])
+
+        self.optimizer = torch.optim.Adam(params=self.net.parameters(), lr=self.learning_rate)
+
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer,
+                                                       parameters['lr_decay_every_n_epoch'],
+                                                       gamma=parameters['lr_decay_rate'])
+        self.schedulers = [lr_scheduler]
+
+        self.history = {}
+        for key in self.loss.key_names:
+            self.history['train_loss_' + key] = []
+            self.history['val_loss_' + key] = []
+
+    def train(self):
+        _div = len(self.train_dataset) / self.batch_size
+        _remain = int(len(self.train_dataset) % self.batch_size > 0)
+        num_it_per_epoch = _div + _remain
+    
+        for e in tqdm(range(self.start_epoch, self.max_epochs)):
+            if self.cur_epoch < self.split_epoch:
+                self.supervised_train()
+            else:
+                self.train_one_epoch()
+            # current_val_loss = self.validate_training()
+
+            if self.schedulers:
+                for sche in self.schedulers:
+                    sche.step()
+            
+            self.cur_epoch += 1
+        
+        self.history["elapsed"] = time.time() - self.start_time
+        self.save_history()
+        self.save_network(self.save_dir / self.state_dict)
+
+
+    def train_one_epoch(self):
+        self.net.train()
+
+        loss_numerics = {}
+        for key in self.loss.key_names:
+            loss_numerics[key] = 0.0
+
+        count_loop = 0
+        for s, l in self.train_dataset:
+            count_loop += 1
+            self.optimizer.zero_grad()
+
+            l = l.detach()
+            s = s.detach()
+
+            w = self.net(l)
+
+            loss = self.loss(w, s)
+            loss['total'].backward()
+            self.optimizer.step()
+
+            for key in self.loss.key_names:
+                loss_numerics[key] += loss[key].item()
+
+        for key in self.loss.key_names:
+            _avg_numeric_loss = loss_numerics[key] / count_loop
+            self.history['train_loss_' + key].append(_avg_numeric_loss)
+
+    def supervised_train(self):
+        self.net.train()
+
+        loss_numerics = {}
+        for key in self.loss.key_names:
+            loss_numerics[key] = 0.0
+
+        count_loop = 0
+        for s, l in self.train_dataset:
+            count_loop += 1
+            self.optimizer.zero_grad()
+
+            l = l.detach()
+            s = s.detach()
+
+            w = self.net(l)
+
+            loss = self.loss.supervised(w)
+            loss['total'].backward()
+            self.optimizer.step()
+
+            for key in self.loss.key_names:
+                loss_numerics[key] += loss[key].item()
+
+        for key in self.loss.key_names:
+            _avg_numeric_loss = loss_numerics[key] / count_loop
+            self.history['train_loss_' + key].append(_avg_numeric_loss)
+    
+    
+
+    def validate_training(self):
+        loss_numerics = {}
+        for key in self.loss.key_names:
+            loss_numerics[key] = 0.0
+
+        count_loop = 0
+        with torch.no_grad():
+            self.net.eval()
+            for s, l in self.val_dataset:
+                count_loop += 1
+
+                w = self.net(l)
+
+                loss = self.loss(w, s)
+
+                for key in self.loss.key_names:
+                    loss_numerics[key] += loss[key].item()
+
+            for key in self.loss.key_names:
+                _avg_numeric_loss = loss_numerics[key] / count_loop
+                self.history['train_loss_' + key].append(_avg_numeric_loss)
+
+        return loss_numerics['total'] / count_loop
+
+    
+    def run_test(self):
+        result = {
+            "s": [],
+            "w": []
+        }
+        with torch.no_grad():
+            for s, l in self.test_dataset:
+                w = self.net(l)
+                result["s"].append(np.squeeze(s))
+                result["w"].append(np.squeeze(w))
+        result["s"] = np.concatenate(result["s"], axis=0)
+        result["w"] = np.concatenate(result["w"], axis=0)
+        return result
+
 
 class TimeShiftModel(BaseModel):
 
@@ -273,3 +531,108 @@ class TimeShiftModel(BaseModel):
                 self.history['train_loss_' + key].append(_avg_numeric_loss)
 
         return loss_numerics['total'] / count_loop
+    
+
+
+
+class MLPWaveletModel(BaseModel):
+
+
+    def __init__(self, save_dir,
+                       dataset,
+                       parameters,
+                       device = None):
+
+        super().__init__(save_dir,
+                         dataset,
+                         parameters,
+                         device = device)
+        
+        self.state_dict = "mlpwavelet_state_dict.pt"
+        self.history_file = "mlpwavelet_history.pkl"
+        self.net = MLPWaveletExtractor()
+        self.net.to(self.device)
+
+        self.loss = MLPLoss()
+
+        self.optimizer = torch.optim.Adam(params=self.net.parameters(), lr=self.learning_rate)
+
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer,
+                                                       parameters['lr_decay_every_n_epoch'],
+                                                       gamma=parameters['lr_decay_rate'])
+        self.schedulers = [lr_scheduler]
+
+        self.history = {}
+        for key in self.loss.key_names:
+            self.history['train_loss_' + key] = []
+            self.history['val_loss_' + key] = []
+
+
+    def train_one_epoch(self):
+        self.net.train()
+
+        loss_numerics = {}
+        for key in self.loss.key_names:
+            loss_numerics[key] = 0.0
+
+        count_loop = 0
+        for s, w_ in self.train_dataset:
+            count_loop += 1
+            self.optimizer.zero_grad()
+
+            w = self.net(s)
+
+            loss = self.loss(w, w_)
+            loss['total'].backward()
+            self.optimizer.step()
+
+            for key in self.loss.key_names:
+                loss_numerics[key] += loss[key].item()
+
+        for key in self.loss.key_names:
+            _avg_numeric_loss = loss_numerics[key] / count_loop
+            self.history['train_loss_' + key].append(_avg_numeric_loss)
+    
+
+    def validate_training(self):
+        loss_numerics = {}
+        for key in self.loss.key_names:
+            loss_numerics[key] = 0.0
+
+        count_loop = 0
+        with torch.no_grad():
+            self.net.eval()
+            for s, w_ in self.val_dataset:
+                count_loop += 1
+
+                w = self.net(s)
+
+                loss = self.loss(w, w_)
+
+                for key in self.loss.key_names:
+                    loss_numerics[key] += loss[key].item()
+
+            for key in self.loss.key_names:
+                _avg_numeric_loss = loss_numerics[key] / count_loop
+                self.history['train_loss_' + key].append(_avg_numeric_loss)
+
+        return loss_numerics['total'] / count_loop
+
+    
+    def run_test(self):
+        result = {
+            "s": [],
+            "w": [],
+            "s_": []
+        }
+        with torch.no_grad():
+            for s_, w_, r in self.test_dataset:
+                w = self.net(s_)
+                result["s_"].append(np.squeeze(s_))
+                result["w"].append(np.squeeze(w))
+                s = extract_seismic(r, w)
+                result["s"].append(np.squeeze(s))
+        result["s"] = np.concatenate(result["s"], axis=0)
+        result["w"] = np.concatenate(result["w"], axis=0)
+        result["s_"] = np.concatenate(result["s_"], axis=0)
+        return result

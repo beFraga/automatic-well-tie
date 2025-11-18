@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import math
 
 def extract_impedance(rho, vp):
     return rho * vp
@@ -43,4 +44,54 @@ def generate_distort_tdr(tdr, n):
 
     return tdrs, shifts
 
-__all__ = ['extract_impedance', 'extract_reflectivity', 'extract_seismic', 'distort_tdr', 'add_awgn', 'generate_distort_tdr']
+
+def ricker_wavelet(f, dt, nt):
+    """Ricker (Mexican hat) wavelet"""
+    t = torch.linspace(-nt//2, nt//2, nt) * dt
+    pi2 = (math.pi * f) ** 2
+    w = (1 - 2 * pi2 * t**2) * torch.exp(-pi2 * t**2)
+    return w / torch.max(torch.abs(w))
+
+def gabor_wavelet(f, dt, nt):
+    """Gabor wavelet (Gaussian modulated cosine)"""
+    t = torch.linspace(-nt//2, nt//2, nt) * dt
+    sigma = 1.0 / (2 * math.pi * f)
+    w = torch.exp(-t**2 / (2 * sigma**2)) * torch.cos(2 * math.pi * f * t)
+    return w / torch.max(torch.abs(w))
+
+def ormsby_wavelet(f1, f2, f3, f4, dt, nt):
+    """Ormsby wavelet (bandpass trapezoidal)"""
+    t = torch.linspace(-nt//2, nt//2, nt) * dt
+    def sinc(x): return torch.where(x == 0, torch.tensor(1.0, device=x.device), torch.sin(math.pi * x) / (math.pi * x))
+    w = (
+        (f4 * sinc(f4 * t))**2
+        - (f3 * sinc(f3 * t))**2
+        - (f2 * sinc(f2 * t))**2
+        + (f1 * sinc(f1 * t))**2
+    ) / ((f4 - f3) + (f2 - f1))
+    return w / torch.max(torch.abs(w))
+
+def klauder_wavelet(f1, f2, T, dt, nt=97):
+    """Klauder wavelet (chirp-like sweep autocorrelation)"""
+    t = torch.linspace(0, T, nt)
+    # Linear chirp
+    sweep = torch.cos(2 * math.pi * (f1 * t + (f2 - f1) * t**2 / (2 * T)))
+    # autocorrelation to create Klauder wavelet
+    w = torch.nn.functional.conv1d(
+        sweep.view(1,1,-1), sweep.flip(0).view(1,1,-1), padding=len(t)//2
+    ).flatten()
+    if w.numel() != nt:
+        w = torch.nn.functional.interpolate(
+            w.view(1,1,-1), size=nt, mode='linear', align_corners=False
+        ).flatten()
+
+    w = w / w.abs().max()
+    return w
+
+def sinc_wavelet(f, dt, nt):
+    """Sinc wavelet (band-limited impulse)"""
+    t = torch.linspace(-nt//2, nt//2, nt) * dt
+    w = torch.where(t == 0, torch.tensor(1.0, device=t.device), torch.sin(2 * math.pi * f * t) / (2 * math.pi * f * t))
+    return w / torch.max(torch.abs(w))
+
+__all__ = ['extract_impedance', 'extract_reflectivity', 'extract_seismic', 'distort_tdr', 'add_awgn', 'generate_distort_tdr', 'ricker_wavelet', 'gabor_wavelet', 'ormsby_wavelet', 'klauder_wavelet', 'sinc_wavelet']

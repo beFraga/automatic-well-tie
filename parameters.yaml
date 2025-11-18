@@ -1,12 +1,43 @@
 dual_task:
-  learning_rate: 0.001
   batch_size: 64
+  learning_rate: 0.001
   max_epochs: 500
   lr_decay_every_n_epoch: 80
   lr_decay_rate: 0.5
   qt_seismic_distortions: 10
   train_sample: 10000
   loss:
-    alpha: 0.1
-    beta: 0.001
-    gamma: 0.00001
+    sigma: 0.05 # reconstrução
+    alpha: 0.4 # spectral
+    gamma: 0.02 # smooth
+    beta: 0.05 # band
+
+mlp_wavelet:
+  learning_rate: 0.001
+  batch_size: 256
+  max_epochs: 1000
+  lr_decay_every_n_epoch: 80
+  lr_decay_rate: 0.5
+  qt_seismic_distortions: 10
+  train_sample: 100000
+
+seis_ae:
+  batch_size: 64
+  learning_rate: 0.001
+  max_epochs: 100
+  lr_decay_every_n_epoch: 30
+  lr_decay_rate: 0.5
+  train_sample: 10000
+
+wavelet_decoder:
+  batch_size: 64
+  learning_rate: 0.001
+  max_epochs: 100
+  lr_decay_every_n_epoch: 80
+  lr_decay_rate: 0.5
+  train_sample: 10000
+  loss:
+    sigma: 0.8 # reconstrução
+    alpha: 0.2 # spectral
+    gamma: 0.05 # smooth
+    beta: 0.06 # band

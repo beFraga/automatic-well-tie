@@ -1,6 +1,6 @@
-from dataset import seismic_dataset_generator, timeshift_dataset_generator
-from model import DualModel, TimeShiftModel
-from utils import plot_seismic_and_wavelet, plot_seismic_comparison, plotar_amostras_como_curvas
+from dataset import timeshift_dataset_generator, MLPDataset, WaveletExtractorDataset, SeismicDataset
+from model import DualModel, TimeShiftModel, MLPWaveletModel, SeisAEModel, WaveletDecoderModel
+from utils import plotar_amostras_como_curvas, plot, plot_2, plot_2j
 
 import torch
 import sys, time, yaml
@@ -21,14 +21,18 @@ print("Dataset directory: %s" % DATASET_PATH)
 
 with open('./parameters.yaml', 'r') as yf:
     parameters = yaml.load(yf, Loader=yaml.SafeLoader)
-dual_task_params = parameters["dual_task"]
+
+dual_task_params    = parameters["dual_task"]
+mlp_params          = parameters["mlp_wavelet"]
+sae_params          = parameters["seis_ae"]
+wd_params           = parameters["wavelet_decoder"]
 
 SAVE_DIR = WORKDIR / "training"
 
 def main():
     start_time = time.time()
     print("----- Starting DualTaskAE Train -----")
-    seismicDataset = seismic_dataset_generator() # TODO: passar argumentos corretos
+    seismicDataset = SeismicDataset({"syfile": SEGY_FILE, "train_size": dual_task_params["train_sample"]}) # TODO: passar argumentos corretos
     train_seis_data, val_seis_data, test_seis_data = seismicDataset.get_loaders()
     dualTask = DualModel(SAVE_DIR,
                          train_seis_data,
@@ -62,7 +66,7 @@ def trainDT():
     start_time = time.time()
     print("----- Starting DualTaskAE Train -----")
     print("----- Generating Seismic Noise Dataset -----")
-    seismicDataset = seismic_dataset_generator(LOGS_PATH, SEGY_FILE, dual_task_params['train_sample'])
+    seismicDataset = SeismicDataset({"syfile": SEGY_FILE, "train_size": dual_task_params["train_sample"]})
     print(f"Generated {len(seismicDataset)} samples")
     dualTask = DualModel(SAVE_DIR,
                          seismicDataset,
@@ -79,13 +83,127 @@ def runDT():
     start_time = time.time()
     print("----- Starting DualTaskAE Test -----")
     print("----- Generating Seismic Noise Dataset -----")
-    seismicDataset = seismic_dataset_generator(LOGS_PATH, SEGY_FILE, dual_task_params['train_sample'])
+    seismicDataset = SeismicDataset({"syfile": SEGY_FILE, "train_size": dual_task_params["train_sample"]})
     print(f"Generated {len(seismicDataset)} samples")
     dualTask = DualModel(SAVE_DIR, seismicDataset, dual_task_params)
     dualTask.load_network(dualTask.save_dir / dualTask.state_dict)
+    plot(dualTask.net.wavelet_branch[-1].weight.detach().cpu().numpy()[0,0,:])
     results = dualTask.run_test()
     plotar_amostras_como_curvas(results["s"], results["s_syn"], results["w"])
-    
+
+
+def trainMLP():
+    start_time = time.time()
+    print("----- Starting MLPWaveletExtractor Train -----")
+    print("----- Generating Seismic Random Dataset -----")
+    seismicDataset = MLPDataset(mlp_params['train_sample'],
+                                {"train": True})
+    print(f"Generated {len(seismicDataset)} samples")
+    mlpwave = MLPWaveletModel(SAVE_DIR,
+                         seismicDataset,
+                         mlp_params,
+                         device=device)
+    mlpwave.train()
+
+    print("Total training time (DualTask):")
+    print(time.time() - start_time)
+    print("Loss total (DualTask):")
+    print(mlpwave.history["train_loss_total"])
+
+def runMLP():
+    print("----- Starting MLPWaveletExtractor Test -----")
+    print("----- Generating Seismic Random Dataset -----")
+    dataset_args = {
+        "lasdir": LOGS_PATH,
+        "syfile": SEGY_FILE,
+        "train": False
+    }
+    seismicDataset = MLPDataset(mlp_params['train_sample'],
+                                dataset_args)
+    print(f"Generated {len(seismicDataset)} samples")
+    mlpwave = MLPWaveletModel(SAVE_DIR,
+                         seismicDataset,
+                         mlp_params,
+                         device=device)
+    mlpwave.load_network(mlpwave.save_dir / mlpwave.state_dict)
+    results = mlpwave.run_test()
+    plotar_amostras_como_curvas(results["s_"], results["s"], results["w"])
+
+
+def trainSAE():
+    start_time = time.time()
+    print("----- Starting SeisAE Train -----")
+    print("----- Generating Seismic Noise Dataset -----")
+    seismicDataset = SeismicDataset({"syfile": SEGY_FILE, "train_size": sae_params["train_sample"]})
+    print(f"Generated {len(seismicDataset)} samples")
+    seisae = SeisAEModel(SAVE_DIR,
+                         seismicDataset,
+                         sae_params,
+                         device=device)
+    seisae.train()
+
+    print("Total training time (SeisAE):")
+    print(time.time() - start_time)
+    print("Loss total (SeisAE):")
+    print(seisae.history["train_loss_total"])
+
+def trainWD():
+    start_time = time.time()
+    print("----- Starting WaveletDecoder Train -----")
+    print("----- Generating Seismic Noise Dataset -----")
+    seismicDataset = SeismicDataset({"syfile": SEGY_FILE, "train_size": sae_params["train_sample"]})
+    print(f"Generated {len(seismicDataset)} samples")
+    seisae = SeisAEModel(SAVE_DIR,
+                         seismicDataset,
+                         sae_params,
+                         device=device)
+    seisae.load_network(seisae.save_dir / seisae.state_dict)
+    seismicDataset = WaveletExtractorDataset({"train_size": wd_params['train_sample'], "syfile": SEGY_FILE, "model": seisae})
+    print(f"Generated {len(seismicDataset)} samples")
+    wdec = WaveletDecoderModel(SAVE_DIR,
+                         seismicDataset,
+                         wd_params,
+                         device=device)
+    wdec.train()
+
+    print("Total training time (SeisAE):")
+    print(time.time() - start_time)
+    print("Loss total (SeisAE):")
+    print(wdec.history["train_loss_total"])
+
+def runWD():
+    print("----- Starting WaveletDecoder Test -----")
+    print("----- Generating Seismic Noise Dataset -----")
+    seismicDataset = SeismicDataset({"syfile": SEGY_FILE, "train_size": sae_params["train_sample"]})
+    print(f"Generated {len(seismicDataset)} samples")
+    seisae = SeisAEModel(SAVE_DIR,
+                         seismicDataset,
+                         sae_params,
+                         device=device)
+    seisae.load_network(seisae.save_dir / seisae.state_dict)
+    seismicDataset = WaveletExtractorDataset({"train_size": wd_params['train_sample'], "syfile": SEGY_FILE, "model": seisae})
+    print(f"Generated {len(seismicDataset)} samples")
+    wdec = WaveletDecoderModel(SAVE_DIR,
+                         seismicDataset,
+                         wd_params,
+                         device=device)
+    wdec.load_network(wdec.save_dir / wdec.state_dict)
+    r = wdec.run_test()
+    plot_2(r['s'], r['w'])
+
+
+def runSAE():
+    print("----- Starting SeismicAE Test -----")
+    print("----- Generating Seismic Noise Dataset -----")
+    seismicDataset = SeismicDataset({"syfile": SEGY_FILE, "train_size": sae_params["train_sample"]})
+    print(f"Generated {len(seismicDataset)} samples")
+    seisae = SeisAEModel(SAVE_DIR,
+                         seismicDataset,
+                         sae_params,
+                         device=device)
+    seisae.load_network(seisae.save_dir / seisae.state_dict)
+    r = seisae.run_test()
+    plot_2j(r['s'], r['s_syn'])
 
     
 
@@ -97,6 +215,12 @@ if __name__ == "__main__":
     4 - Treinar ts
     5 - Carregar dt
     6 - Carregar ts
+    7 - Treinar mlp
+    8 - Carregar mlp
+    9 - Treinar SAE
+    10 - Treinar WD
+    11 - Carregar WD
+    12 - Carregar SAE
     """)
     i = int(input())
     if i == 1:
@@ -107,3 +231,15 @@ if __name__ == "__main__":
         sys.exit(trainDT())
     elif i == 5:
         sys.exit(runDT())
+    elif i == 7:
+        sys.exit(trainMLP())
+    elif i == 8:
+        sys.exit(runMLP())
+    elif i == 9:
+        sys.exit(trainSAE())
+    elif i == 10:
+        sys.exit(trainWD())
+    elif i == 11:
+        sys.exit(runWD())
+    elif i == 12:
+        sys.exit(runSAE())
