@@ -1,12 +1,12 @@
 import torch
 import lasio, segyio
 import numpy as np
+from torch.utils.data import Dataset, DataLoader, TensorDataset, Subset, random_split
 
 import random
 
-from geophysics import *
+from welltie.geophysics import *
 from utils import adjust_data_length
-from torch.utils.data import Dataset, DataLoader, TensorDataset, Subset, random_split
 
 class BaseDataset(Dataset):
     def __init__(self, x, train_ratio=0.7, val_ratio=0.2, batch_size=32):

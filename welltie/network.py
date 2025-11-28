@@ -1,9 +1,8 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import random
 
-from geophysics import ricker_wavelet
+from welltie.geophysics import ricker_wavelet
 from utils import plot
 
 class DualTaskAE(nn.Module):

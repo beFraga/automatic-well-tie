@@ -15,7 +15,7 @@ dual_task:
 mlp_wavelet:
   learning_rate: 0.001
   batch_size: 256
-  max_epochs: 1000
+  max_epochs: 100
   lr_decay_every_n_epoch: 80
   lr_decay_rate: 0.5
   qt_seismic_distortions: 10
@@ -38,6 +38,6 @@ wavelet_decoder:
   train_sample: 10000
   loss:
     sigma: 0.8 # reconstrução
-    alpha: 0.2 # spectral
-    gamma: 0.05 # smooth
-    beta: 0.06 # band
+    alpha: 0.5 # spectral
+    gamma: 5 # smooth
+    beta: 0.7 # band

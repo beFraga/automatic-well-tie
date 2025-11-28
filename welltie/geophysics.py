@@ -94,4 +94,17 @@ def sinc_wavelet(f, dt, nt):
     w = torch.where(t == 0, torch.tensor(1.0, device=t.device), torch.sin(2 * math.pi * f * t) / (2 * math.pi * f * t))
     return w / torch.max(torch.abs(w))
 
-__all__ = ['extract_impedance', 'extract_reflectivity', 'extract_seismic', 'distort_tdr', 'add_awgn', 'generate_distort_tdr', 'ricker_wavelet', 'gabor_wavelet', 'ormsby_wavelet', 'klauder_wavelet', 'sinc_wavelet']
+
+def power_spectrum(a):
+    a = torch.tensor(a)
+    af = torch.fft.rfft(a, dim=-1)
+
+    ap = torch.abs(af)**2
+
+    ap = torch.clamp(ap, min=1e-8)
+
+    ap = ap / (torch.sum(ap, dim=-1, keepdim=True) + 1e-8)
+
+    return ap
+
+__all__ = ['extract_impedance', 'extract_reflectivity', 'extract_seismic', 'distort_tdr', 'add_awgn', 'generate_distort_tdr', 'ricker_wavelet', 'gabor_wavelet', 'ormsby_wavelet', 'klauder_wavelet', 'sinc_wavelet', 'power_spectrum']

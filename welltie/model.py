@@ -6,9 +6,9 @@ import pickle
 import numpy as np
 from tqdm import tqdm
 
-from network import DualTaskAE, TimeShiftPredictor, MLPWaveletExtractor, SeisAE, WaveletDecoder
-from losses import DualTaskLoss, TimeShiftLoss, MLPLoss, SeisAELoss, WaveletDecoderLoss
-from geophysics import extract_seismic
+from welltie.network import DualTaskAE, TimeShiftPredictor, MLPWaveletExtractor, SeisAE, WaveletDecoder
+from welltie.losses import DualTaskLoss, TimeShiftLoss, MLPLoss, SeisAELoss, WaveletDecoderLoss
+from welltie.geophysics import extract_seismic
 
 
 class BaseModel:
@@ -328,7 +328,7 @@ class WaveletDecoderModel(BaseModel):
         _div = len(self.train_dataset) / self.batch_size
         _remain = int(len(self.train_dataset) % self.batch_size > 0)
         num_it_per_epoch = _div + _remain
-    
+        print('epochs: ' + str(self.max_epochs))
         for e in tqdm(range(self.start_epoch, self.max_epochs)):
             if self.cur_epoch < self.split_epoch:
                 self.supervised_train()
@@ -575,7 +575,7 @@ class MLPWaveletModel(BaseModel):
             loss_numerics[key] = 0.0
 
         count_loop = 0
-        for s, w_ in self.train_dataset:
+        for s, w_, _ in self.train_dataset:
             count_loop += 1
             self.optimizer.zero_grad()
 
@@ -601,7 +601,7 @@ class MLPWaveletModel(BaseModel):
         count_loop = 0
         with torch.no_grad():
             self.net.eval()
-            for s, w_ in self.val_dataset:
+            for s, w_, _ in self.val_dataset:
                 count_loop += 1
 
                 w = self.net(s)
