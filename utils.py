@@ -150,3 +150,49 @@ def plot_2j(real, syn):
         plt.legend(['Real', 'Gerada'], loc='upper right')
 
         plt.show()
+
+
+
+def plot_4(a, b, c, d):
+    """
+    Plota cada linha dos arrays como uma curva separada.
+
+    - s (n,x) e s_syn (n,y) são plotados juntos para comparação.
+    - w (n,z) é plotado em um gráfico ao lado.
+    - O eixo X de cada curva terá uma "escala unitária" (0, 1, 2, ...).
+
+    Args:
+        s (np.array): Array (n, x) onde cada uma das 'n' linhas é uma amostra.
+        s_syn (np.array): Array (n, y) para comparação com 's'.
+        w (np.array): Array (n, z) para o gráfico individual.
+    """
+    for i in range(a.shape[0]):
+        fig, ((ax1,ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 6))
+
+        ax1.plot(a[i])
+        ax1.set_title(f'Plot {i}')
+        ax1.set_xlabel('Escala Unitária (índice dentro da amostra)')
+        ax1.set_ylabel('Amplitude')
+        ax1.grid(True)
+
+        ax2.plot(b[i])
+        ax2.set_title(f'')
+        ax2.set_xlabel('Escala Unitária (índice dentro da amostra)')
+        ax2.set_ylabel('Amplitude')
+        ax2.grid(True)
+
+        ax3.plot(c[i])
+        ax3.set_title(f'')
+        ax3.set_xlabel('Escala Unitária (índice dentro da amostra)')
+        ax3.set_ylabel('Amplitude')
+        ax3.grid(True)
+
+        ax4.plot(d[i])
+        ax4.set_title(f'')
+        ax4.set_xlabel('Escala Unitária (índice dentro da amostra)')
+        ax4.set_ylabel('Amplitude')
+        ax4.grid(True)
+
+        plt.tight_layout()
+
+        plt.show()
