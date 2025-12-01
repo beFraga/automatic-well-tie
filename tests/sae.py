@@ -68,4 +68,4 @@ switch = {
 }
 
 if __name__ == "__main__":
-    sys.exit(switch[sys.argv[0]]())
+    sys.exit(switch[sys.argv[1]]())
