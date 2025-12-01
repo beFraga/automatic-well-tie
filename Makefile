@@ -1,10 +1,11 @@
-PYTHON := py
+PYTHON := python
 
 ifndef file
-	$(error Use: make (run, train) file=file.py)
+$(error Use: make (run, train) file=file.py)
+endif
 
 run:
-	$(PYTHON) tests.$(file) run
+	$(PYTHON) -m tests.$(file) run
 
 train:
-	$(PYTHON) tests.$(file) train
+	$(PYTHON) -m tests.$(file) train
