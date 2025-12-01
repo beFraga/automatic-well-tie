@@ -67,4 +67,13 @@ switch = {
 }
 
 if __name__ == "__main__":
-    sys.exit(switch[sys.argv[0]]())
+    if len(sys.argv) < 2:
+        print("Use: python -m tests.dt (train|run)")
+        sys.exit(1)
+
+    action = sys.argv[1]
+    if action not in switch.keys():
+        print("Use: python -m tests.dt (train|run)")
+        sys.exit(1)
+    else:
+        sys.exit(switch[action]())
