@@ -3,4 +3,5 @@ venv
 .venv
 codigos_exemplo
 __pycache__
+.idea
 *.ipynb
