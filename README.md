@@ -11,13 +11,13 @@ pip install -r requirements.txt
 Para executar um dos tipos de amarração sísmica disponíveis, execute:
 
 ``` shell
-make run file=nome_arquivo.py
+make run file=nome_arquivo
 ```
 
 Para treinar um dos tipos de amarração sísmica disponíveis, execute:
 
 ``` shell
-make train file=nome_arquivo.py
+make train file=nome_arquivo
 ```
 
 
