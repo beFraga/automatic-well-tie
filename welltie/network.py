@@ -175,4 +175,11 @@ class MLPWaveletExtractor(nn.Module):
 
 
     def forward(self, x):
-        return self.network(x)
+        # aceita entrada com shape (B, 300) ou (B, 1, 300)
+        if x.ndim == 3:
+            x = x.view(x.shape[0], -1)
+        w = self.network(x)
+        # normaliza a wavelet gerada para energia unitária (compatível com outras partes do código)
+        denom = torch.sqrt(torch.sum(w ** 2, dim=-1, keepdim=True) + 1e-8)
+        w = w / denom
+        return w

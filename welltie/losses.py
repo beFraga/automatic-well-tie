@@ -207,8 +207,11 @@ class MLPLoss(BaseLoss):
     def __call__(self, y, y_):
         lch = self.logcosh(y, y_)
         cos = torch.nn.CosineSimilarity()
+        # cosine similarity in [ -1, 1 ] -> we want a loss that decreases when
+        # similarity increases, so use (1 - mean_cosine)
         cs = torch.mean(cos(y, y_))
-        total = lch + cs
+        cos_loss = 1.0 - cs
+        total = lch + cos_loss
         loss = {
             'total': total,
             'logcosh': lch,
