@@ -56,6 +56,9 @@ def adjust_data_length(data, target_length=300, device='cpu'):
     data_out : torch.Tensor
         Dado ajustado com exatamente `target_length` amostras.
     """
+    if isinstance(data, np.ndarray):
+        data = torch.from_numpy(data.astype(np.float32))
+
     data = data.to(device).flatten()
     n = data.numel()
 

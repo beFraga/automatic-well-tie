@@ -570,13 +570,15 @@ class MLPWaveletModel(BaseModel):
     def train_one_epoch(self):
         self.net.train()
 
-        loss_numerics = {}
-        for key in self.loss.key_names:
-            loss_numerics[key] = 0.0
-
+        loss_numerics = {key: 0.0 for key in self.loss.key_names}
         count_loop = 0
+
         for s, w_, _ in self.train_dataset:
             count_loop += 1
+
+            s = s.to(self.device)
+            w_ = w_.to(self.device)
+
             self.optimizer.zero_grad()
 
             w = self.net(s)
@@ -604,6 +606,9 @@ class MLPWaveletModel(BaseModel):
             for s, w_, _ in self.val_dataset:
                 count_loop += 1
 
+                s = s.to(self.device)
+                w_ = w_.to(self.device)
+
                 w = self.net(s)
 
                 loss = self.loss(w, w_)
@@ -626,9 +631,13 @@ class MLPWaveletModel(BaseModel):
         }
         with torch.no_grad():
             for s_, w_, r in self.test_dataset:
+                s_ = s_.to(self.device)
+                w_ = w_.to(self.device)
+                r = r.to(self.device)
+
                 w = self.net(s_)
-                result["s_"].append(np.squeeze(s_))
-                result["w"].append(np.squeeze(w))
+                result["s_"].append(np.squeeze(s_.detach().cpu().numpy()))
+                result["w"].append(np.squeeze(w.detach().cpu().numpy()))
                 s = extract_seismic(r, w)
                 result["s"].append(np.squeeze(s))
         result["s"] = np.concatenate(result["s"], axis=0)

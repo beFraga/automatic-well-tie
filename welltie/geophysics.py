@@ -11,6 +11,23 @@ def extract_reflectivity(z):
     return (zii - zi) / (zii + zi)
 
 def extract_seismic(r, w):
+    """Convolução entre refletividade `r` e wavelet `w`.
+
+    Aceita `r` e `w` como `numpy.ndarray`, `torch.Tensor` (CPU ou CUDA) ou listas.
+    Se receber tensores PyTorch em GPU, move-os para CPU antes de converter para NumPy.
+
+    Retorna um `numpy.ndarray` resultante da convolução (comportamento equivalente a `np.convolve`).
+    """
+    # Se for tensor PyTorch, converte para numpy em CPU
+    if isinstance(r, torch.Tensor):
+        r = r.detach().cpu().numpy()
+    if isinstance(w, torch.Tensor):
+        w = w.detach().cpu().numpy()
+
+    # Garante arrays NumPy 1D
+    r = np.asarray(r).ravel()
+    w = np.asarray(w).ravel()
+
     return np.convolve(r, w)
 
 def distort_tdr(tdr, sigma=5, scale=10):
