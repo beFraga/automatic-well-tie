@@ -25,12 +25,14 @@ def plotar_amostras_como_curvas(real, syn, solo):
         ax1.set_xlabel("Escala Unitária (índice dentro da amostra)")
         ax1.set_ylabel("Amplitude")
         ax1.grid(True)
+        ax2.set_ylim(-1, 1)
         ax1.legend(["Real", "Gerada"], loc="upper right")
 
         ax2.plot(solo[i])
-        ax2.set_title("")
+        ax2.set_title(f"Wavelet {i}")
         ax2.set_xlabel("Escala Unitária (índice dentro da amostra)")
         ax2.set_ylabel("Amplitude")
+        ax2.set_ylim(-1, 1)
         ax2.grid(True)
 
         plt.tight_layout()
