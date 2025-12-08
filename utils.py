@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+
 def plotar_amostras_como_curvas(real, syn, solo):
     """
     Plota cada linha dos arrays como uma curva separada.
@@ -18,19 +19,18 @@ def plotar_amostras_como_curvas(real, syn, solo):
     for i in range(real.shape[0]):
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
 
-        ax1.plot(real[i], color='blue', alpha=0.7)
-        ax1.plot(syn[i], color='red', linestyle='--', alpha=0.7)
-        ax1.set_title(f'Plot {i}')
-        ax1.set_xlabel('Escala Unitária (índice dentro da amostra)')
-        ax1.set_ylabel('Amplitude')
+        ax1.plot(real[i], color="blue", alpha=0.7)
+        ax1.plot(syn[i], color="red", linestyle="--", alpha=0.7)
+        ax1.set_title(f"Plot {i}")
+        ax1.set_xlabel("Escala Unitária (índice dentro da amostra)")
+        ax1.set_ylabel("Amplitude")
         ax1.grid(True)
-        ax1.legend(['Real', 'Gerada'], loc='upper right')
-
+        ax1.legend(["Real", "Gerada"], loc="upper right")
 
         ax2.plot(solo[i])
-        ax2.set_title(f'')
-        ax2.set_xlabel('Escala Unitária (índice dentro da amostra)')
-        ax2.set_ylabel('Amplitude')
+        ax2.set_title("")
+        ax2.set_xlabel("Escala Unitária (índice dentro da amostra)")
+        ax2.set_ylabel("Amplitude")
         ax2.grid(True)
 
         plt.tight_layout()
@@ -38,7 +38,7 @@ def plotar_amostras_como_curvas(real, syn, solo):
         plt.show()
 
 
-def adjust_data_length(data, target_length=300, device='cpu'):
+def adjust_data_length(data, target_length=300, device="cpu"):
     """
     Ajusta o comprimento de um dado para o tamanho fixo (300 amostras)
 
@@ -84,17 +84,17 @@ def adjust_data_length(data, target_length=300, device='cpu'):
 
 
 def plot(x):
-        fig, ax = plt.subplots(1, 1, figsize=(14, 6))
-        ax.plot(x, color='blue', alpha=0.7)
-        ax.set_title(f'Plot')
-        ax.set_xlabel('Escala Unitária (índice dentro da amostra)')
-        ax.set_ylabel('Amplitude')
-        ax.grid(True)
+    fig, ax = plt.subplots(1, 1, figsize=(14, 6))
+    ax.plot(x, color="blue", alpha=0.7)
+    ax.set_title("Plot")
+    ax.set_xlabel("Escala Unitária (índice dentro da amostra)")
+    ax.set_ylabel("Amplitude")
+    ax.grid(True)
 
-        plt.tight_layout()
-        plt.show()
+    plt.tight_layout()
+    plt.show()
 
-    
+
 def plot_2(a, b):
     """
     Plota cada linha dos arrays como uma curva separada.
@@ -112,22 +112,20 @@ def plot_2(a, b):
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
 
         ax1.plot(a[i])
-        ax1.set_title(f'Plot {i}')
-        ax1.set_xlabel('Escala Unitária (índice dentro da amostra)')
-        ax1.set_ylabel('Amplitude')
+        ax1.set_title(f"Plot {i}")
+        ax1.set_xlabel("Escala Unitária (índice dentro da amostra)")
+        ax1.set_ylabel("Amplitude")
         ax1.grid(True)
 
-
         ax2.plot(b[i])
-        ax2.set_title(f'')
-        ax2.set_xlabel('Escala Unitária (índice dentro da amostra)')
-        ax2.set_ylabel('Amplitude')
+        ax2.set_title("")
+        ax2.set_xlabel("Escala Unitária (índice dentro da amostra)")
+        ax2.set_ylabel("Amplitude")
         ax2.grid(True)
 
         plt.tight_layout()
 
         plt.show()
-
 
 
 def plot_2j(real, syn):
@@ -144,16 +142,15 @@ def plot_2j(real, syn):
         w (np.array): Array (n, z) para o gráfico individual.
     """
     for i in range(real.shape[0]):
-        plt.plot(real[i], color='blue', alpha=0.7)
-        plt.plot(syn[i], color='red', linestyle='--', alpha=0.7)
-        plt.suptitle(f'Plot {i}')
-        plt.xlabel('Escala Unitária (índice dentro da amostra)')
-        plt.ylabel('Amplitude')
+        plt.plot(real[i], color="blue", alpha=0.7)
+        plt.plot(syn[i], color="red", linestyle="--", alpha=0.7)
+        plt.suptitle(f"Plot {i}")
+        plt.xlabel("Escala Unitária (índice dentro da amostra)")
+        plt.ylabel("Amplitude")
         plt.grid(True)
-        plt.legend(['Real', 'Gerada'], loc='upper right')
+        plt.legend(["Real", "Gerada"], loc="upper right")
 
         plt.show()
-
 
 
 def plot_4(a, b, c, d):
@@ -170,30 +167,30 @@ def plot_4(a, b, c, d):
         w (np.array): Array (n, z) para o gráfico individual.
     """
     for i in range(a.shape[0]):
-        fig, ((ax1,ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 6))
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 6))
 
         ax1.plot(a[i])
-        ax1.set_title(f'Plot {i}')
-        ax1.set_xlabel('Escala Unitária (índice dentro da amostra)')
-        ax1.set_ylabel('Amplitude')
+        ax1.set_title(f"Plot {i}")
+        ax1.set_xlabel("Escala Unitária (índice dentro da amostra)")
+        ax1.set_ylabel("Amplitude")
         ax1.grid(True)
 
         ax2.plot(b[i])
-        ax2.set_title(f'')
-        ax2.set_xlabel('Escala Unitária (índice dentro da amostra)')
-        ax2.set_ylabel('Amplitude')
+        ax2.set_title("")
+        ax2.set_xlabel("Escala Unitária (índice dentro da amostra)")
+        ax2.set_ylabel("Amplitude")
         ax2.grid(True)
 
         ax3.plot(c[i])
-        ax3.set_title(f'')
-        ax3.set_xlabel('Escala Unitária (índice dentro da amostra)')
-        ax3.set_ylabel('Amplitude')
+        ax3.set_title("")
+        ax3.set_xlabel("Escala Unitária (índice dentro da amostra)")
+        ax3.set_ylabel("Amplitude")
         ax3.grid(True)
 
         ax4.plot(d[i])
-        ax4.set_title(f'')
-        ax4.set_xlabel('Escala Unitária (índice dentro da amostra)')
-        ax4.set_ylabel('Amplitude')
+        ax4.set_title("")
+        ax4.set_xlabel("Escala Unitária (índice dentro da amostra)")
+        ax4.set_ylabel("Amplitude")
         ax4.grid(True)
 
         plt.tight_layout()

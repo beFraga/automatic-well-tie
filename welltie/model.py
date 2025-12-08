@@ -6,8 +6,20 @@ import pickle
 import numpy as np
 from tqdm import tqdm
 
-from welltie.network import DualTaskAE, TimeShiftPredictor, MLPWaveletExtractor, SeisAE, WaveletDecoder
-from welltie.losses import DualTaskLoss, TimeShiftLoss, MLPLoss, SeisAELoss, WaveletDecoderLoss
+from welltie.network import (
+    DualTaskAE,
+    TimeShiftPredictor,
+    MLPWaveletExtractor,
+    SeisAE,
+    WaveletDecoder,
+)
+from welltie.losses import (
+    DualTaskLoss,
+    TimeShiftLoss,
+    MLPLoss,
+    SeisAELoss,
+    WaveletDecoderLoss,
+)
 from welltie.geophysics import extract_seismic
 
 
@@ -188,18 +200,9 @@ class DualModel(BaseModel):
 
 
 class SeisAEModel(BaseModel):
+    def __init__(self, save_dir, dataset, parameters, device=None):
+        super().__init__(save_dir, dataset, parameters, device=device)
 
-
-    def __init__(self, save_dir,
-                       dataset,
-                       parameters,
-                       device = None):
-
-        super().__init__(save_dir,
-                         dataset,
-                         parameters,
-                         device = device)
-        
         self.state_dict = "seisaemodel_state_dict.pt"
         self.history_file = "seisaemodel_history.pkl"
         self.net = SeisAE()
@@ -207,18 +210,21 @@ class SeisAEModel(BaseModel):
 
         self.loss = SeisAELoss()
 
-        self.optimizer = torch.optim.Adam(params=self.net.parameters(), lr=self.learning_rate)
+        self.optimizer = torch.optim.Adam(
+            params=self.net.parameters(), lr=self.learning_rate
+        )
 
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer,
-                                                       parameters['lr_decay_every_n_epoch'],
-                                                       gamma=parameters['lr_decay_rate'])
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(
+            self.optimizer,
+            parameters["lr_decay_every_n_epoch"],
+            gamma=parameters["lr_decay_rate"],
+        )
         self.schedulers = [lr_scheduler]
 
         self.history = {}
         for key in self.loss.key_names:
-            self.history['train_loss_' + key] = []
-            self.history['val_loss_' + key] = []
-
+            self.history["train_loss_" + key] = []
+            self.history["val_loss_" + key] = []
 
     def train_one_epoch(self):
         self.net.train()
@@ -235,7 +241,7 @@ class SeisAEModel(BaseModel):
             s_syn = self.net(s_noise)
 
             loss = self.loss(s, s_syn)
-            loss['total'].backward()
+            loss["total"].backward()
             self.optimizer.step()
 
             for key in self.loss.key_names:
@@ -243,8 +249,7 @@ class SeisAEModel(BaseModel):
 
         for key in self.loss.key_names:
             _avg_numeric_loss = loss_numerics[key] / count_loop
-            self.history['train_loss_' + key].append(_avg_numeric_loss)
-    
+            self.history["train_loss_" + key].append(_avg_numeric_loss)
 
     def validate_training(self):
         loss_numerics = {}
@@ -266,11 +271,10 @@ class SeisAEModel(BaseModel):
 
             for key in self.loss.key_names:
                 _avg_numeric_loss = loss_numerics[key] / count_loop
-                self.history['train_loss_' + key].append(_avg_numeric_loss)
+                self.history["train_loss_" + key].append(_avg_numeric_loss)
 
-        return loss_numerics['total'] / count_loop
+        return loss_numerics["total"] / count_loop
 
-    
     def run_test(self):
         result = {
             "s": [],
@@ -278,31 +282,24 @@ class SeisAEModel(BaseModel):
         }
         with torch.no_grad():
             for s, s_noise in self.test_dataset:
+                s = s.to(self.device)
+                s_noise = s_noise.to(self.device)
+
                 s_syn = self.net(s_noise)
-                result["s_syn"].append(np.squeeze(s_syn))
-                result["s"].append(np.squeeze(s_noise))
+                result["s_syn"].append(np.squeeze(s_syn.detach().cpu().numpy()))
+                result["s"].append(np.squeeze(s_noise.detach().cpu().numpy()))
         result["s"] = np.concatenate(result["s"], axis=0)
         result["s_syn"] = np.concatenate(result["s_syn"], axis=0)
         return result
-    
-    
+
     def encode(self, s):
         return self.net.encode(s)
 
 
 class WaveletDecoderModel(BaseModel):
+    def __init__(self, save_dir, dataset, parameters, device=None):
+        super().__init__(save_dir, dataset, parameters, device=device)
 
-
-    def __init__(self, save_dir,
-                       dataset,
-                       parameters,
-                       device = None):
-
-        super().__init__(save_dir,
-                         dataset,
-                         parameters,
-                         device = device)
-        
         self.state_dict = "wavelet_decoder_state_dict.pt"
         self.history_file = "wavelet_decoder_history.pkl"
         self.net = WaveletDecoder()
@@ -310,25 +307,29 @@ class WaveletDecoderModel(BaseModel):
 
         self.split_epoch = int(0.2 * self.max_epochs)
 
-        self.loss = WaveletDecoderLoss(self.params['loss'])
+        self.loss = WaveletDecoderLoss(self.params["loss"])
 
-        self.optimizer = torch.optim.Adam(params=self.net.parameters(), lr=self.learning_rate)
+        self.optimizer = torch.optim.Adam(
+            params=self.net.parameters(), lr=self.learning_rate
+        )
 
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer,
-                                                       parameters['lr_decay_every_n_epoch'],
-                                                       gamma=parameters['lr_decay_rate'])
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(
+            self.optimizer,
+            parameters["lr_decay_every_n_epoch"],
+            gamma=parameters["lr_decay_rate"],
+        )
         self.schedulers = [lr_scheduler]
 
         self.history = {}
         for key in self.loss.key_names:
-            self.history['train_loss_' + key] = []
-            self.history['val_loss_' + key] = []
+            self.history["train_loss_" + key] = []
+            self.history["val_loss_" + key] = []
 
     def train(self):
         _div = len(self.train_dataset) / self.batch_size
         _remain = int(len(self.train_dataset) % self.batch_size > 0)
         num_it_per_epoch = _div + _remain
-        print('epochs: ' + str(self.max_epochs))
+        print("epochs: " + str(self.max_epochs))
         for e in tqdm(range(self.start_epoch, self.max_epochs)):
             if self.cur_epoch < self.split_epoch:
                 self.supervised_train()
@@ -339,13 +340,12 @@ class WaveletDecoderModel(BaseModel):
             if self.schedulers:
                 for sche in self.schedulers:
                     sche.step()
-            
+
             self.cur_epoch += 1
-        
+
         self.history["elapsed"] = time.time() - self.start_time
         self.save_history()
         self.save_network(self.save_dir / self.state_dict)
-
 
     def train_one_epoch(self):
         self.net.train()
@@ -365,7 +365,7 @@ class WaveletDecoderModel(BaseModel):
             w = self.net(l)
 
             loss = self.loss(w, s)
-            loss['total'].backward()
+            loss["total"].backward()
             self.optimizer.step()
 
             for key in self.loss.key_names:
@@ -373,7 +373,7 @@ class WaveletDecoderModel(BaseModel):
 
         for key in self.loss.key_names:
             _avg_numeric_loss = loss_numerics[key] / count_loop
-            self.history['train_loss_' + key].append(_avg_numeric_loss)
+            self.history["train_loss_" + key].append(_avg_numeric_loss)
 
     def supervised_train(self):
         self.net.train()
@@ -393,7 +393,7 @@ class WaveletDecoderModel(BaseModel):
             w = self.net(l)
 
             loss = self.loss.supervised(w)
-            loss['total'].backward()
+            loss["total"].backward()
             self.optimizer.step()
 
             for key in self.loss.key_names:
@@ -401,9 +401,7 @@ class WaveletDecoderModel(BaseModel):
 
         for key in self.loss.key_names:
             _avg_numeric_loss = loss_numerics[key] / count_loop
-            self.history['train_loss_' + key].append(_avg_numeric_loss)
-    
-    
+            self.history["train_loss_" + key].append(_avg_numeric_loss)
 
     def validate_training(self):
         loss_numerics = {}
@@ -425,16 +423,12 @@ class WaveletDecoderModel(BaseModel):
 
             for key in self.loss.key_names:
                 _avg_numeric_loss = loss_numerics[key] / count_loop
-                self.history['train_loss_' + key].append(_avg_numeric_loss)
+                self.history["train_loss_" + key].append(_avg_numeric_loss)
 
-        return loss_numerics['total'] / count_loop
+        return loss_numerics["total"] / count_loop
 
-    
     def run_test(self):
-        result = {
-            "s": [],
-            "w": []
-        }
+        result = {"s": [], "w": []}
         with torch.no_grad():
             for s, l in self.test_dataset:
                 w = self.net(l)
@@ -529,24 +523,13 @@ class TimeShiftModel(BaseModel):
                 _avg_numeric_loss = loss_numerics[key] / count_loop
                 self.history["train_loss_" + key].append(_avg_numeric_loss)
 
-        return loss_numerics['total'] / count_loop
-    
-
+        return loss_numerics["total"] / count_loop
 
 
 class MLPWaveletModel(BaseModel):
+    def __init__(self, save_dir, dataset, parameters, device=None):
+        super().__init__(save_dir, dataset, parameters, device=device)
 
-
-    def __init__(self, save_dir,
-                       dataset,
-                       parameters,
-                       device = None):
-
-        super().__init__(save_dir,
-                         dataset,
-                         parameters,
-                         device = device)
-        
         self.state_dict = "mlpwavelet_state_dict.pt"
         self.history_file = "mlpwavelet_history.pkl"
         self.net = MLPWaveletExtractor()
@@ -554,18 +537,21 @@ class MLPWaveletModel(BaseModel):
 
         self.loss = MLPLoss()
 
-        self.optimizer = torch.optim.Adam(params=self.net.parameters(), lr=self.learning_rate)
+        self.optimizer = torch.optim.Adam(
+            params=self.net.parameters(), lr=self.learning_rate
+        )
 
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer,
-                                                       parameters['lr_decay_every_n_epoch'],
-                                                       gamma=parameters['lr_decay_rate'])
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(
+            self.optimizer,
+            parameters["lr_decay_every_n_epoch"],
+            gamma=parameters["lr_decay_rate"],
+        )
         self.schedulers = [lr_scheduler]
 
         self.history = {}
         for key in self.loss.key_names:
-            self.history['train_loss_' + key] = []
-            self.history['val_loss_' + key] = []
-
+            self.history["train_loss_" + key] = []
+            self.history["val_loss_" + key] = []
 
     def train_one_epoch(self):
         self.net.train()
@@ -584,7 +570,7 @@ class MLPWaveletModel(BaseModel):
             w = self.net(s)
 
             loss = self.loss(w, w_)
-            loss['total'].backward()
+            loss["total"].backward()
             self.optimizer.step()
 
             for key in self.loss.key_names:
@@ -592,8 +578,7 @@ class MLPWaveletModel(BaseModel):
 
         for key in self.loss.key_names:
             _avg_numeric_loss = loss_numerics[key] / count_loop
-            self.history['train_loss_' + key].append(_avg_numeric_loss)
-    
+            self.history["train_loss_" + key].append(_avg_numeric_loss)
 
     def validate_training(self):
         loss_numerics = {}
@@ -618,17 +603,12 @@ class MLPWaveletModel(BaseModel):
 
             for key in self.loss.key_names:
                 _avg_numeric_loss = loss_numerics[key] / count_loop
-                self.history['train_loss_' + key].append(_avg_numeric_loss)
+                self.history["train_loss_" + key].append(_avg_numeric_loss)
 
-        return loss_numerics['total'] / count_loop
+        return loss_numerics["total"] / count_loop
 
-    
     def run_test(self):
-        result = {
-            "s": [],
-            "w": [],
-            "s_": []
-        }
+        result = {"s": [], "w": [], "s_": []}
         with torch.no_grad():
             for s_, w_, r in self.test_dataset:
                 s_ = s_.to(self.device)
