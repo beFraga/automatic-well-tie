@@ -2,55 +2,63 @@ import torch
 import random
 from welltie.geophysics import ricker_wavelet
 
+
 class BaseLoss(object):
     key_names = None
+
     def __init__(self):
         if self.key_names == None:
-            raise NotImplementedError("Losses subclasses must implement `key_names` attribute")
+            raise NotImplementedError(
+                "Losses subclasses must implement `key_names` attribute"
+            )
 
-        if 'total' not in self.key_names:
+        if "total" not in self.key_names:
             raise NotImplementedError("The key `total` must be present for backdrop")
 
+
 class DualTaskLoss(BaseLoss):
-    key_names = ('total', 'reconstruction', 'spectral', 'smooth')
+    key_names = ("total", "reconstruction", "spectral", "smooth")
 
     def __init__(self, parameters):
         self.key_names = DualTaskLoss.key_names
         super().__init__()
 
-        self.sigma = parameters['sigma']
-        self.alpha = parameters['alpha']
-        self.beta = parameters['beta']
-        self.gamma = parameters['gamma']
+        self.sigma = parameters["sigma"]
+        self.alpha = parameters["alpha"]
+        self.beta = parameters["beta"]
+        self.gamma = parameters["gamma"]
 
     def __call__(self, s, s_rec, w):
-        loss_reconstruction = self.sigma * torch.mean((s - s_rec) ** 2) # sigma * ||s - s'|| ^ 2
+        loss_reconstruction = self.sigma * torch.mean(
+            (s - s_rec) ** 2
+        )  # sigma * ||s - s'|| ^ 2
 
-        loss_spectral = self.spectral_loss(w, s) # alpha * ||F(w') - F(s)|| ^ 2
+        loss_spectral = self.spectral_loss(w, s)  # alpha * ||F(w') - F(s)|| ^ 2
 
-        loss_smooth = self.gamma * torch.mean((w[:,:,1:] - w[:,:,:-1]) ** 2) # gamma * sum(w_i - w_i-1) ^ 2
-        
+        loss_smooth = self.gamma * torch.mean(
+            (w[:, :, 1:] - w[:, :, :-1]) ** 2
+        )  # gamma * sum(w_i - w_i-1) ^ 2
+
         loss_band = self.band_limited_loss(w)
 
         loss_total = loss_reconstruction + loss_spectral + loss_smooth + loss_band
 
         loss = {
-                'total': loss_total,
-                'reconstruction': loss_reconstruction,
-                'spectral': loss_spectral,
-                'smooth': loss_smooth
-               }
-        
-        return loss
+            "total": loss_total,
+            "reconstruction": loss_reconstruction,
+            "spectral": loss_spectral,
+            "smooth": loss_smooth,
+        }
 
+        return loss
 
     def spectral_loss(self, w, s):
         Wf = torch.fft.rfft(w, dim=-1)
         Sf = torch.fft.rfft(s, dim=-1)
 
         # converte em módulo ou potência
-        Wp = torch.abs(Wf)**2
-        Sp = torch.abs(Sf)**2
+        Wp = torch.abs(Wf) ** 2
+        Sp = torch.abs(Sf) ** 2
 
         # normaliza cada batch individualmente (para evitar dominância de amplitude)
         Wp = Wp / (torch.max(Wp, dim=-1, keepdim=True).values + 1e-8)
@@ -63,11 +71,11 @@ class DualTaskLoss(BaseLoss):
             ).squeeze(1)
 
         # loss espectral: ||F(w') - F(s)|| ^ 2
-        #loss = torch.linalg.norm(torch.abs(torch.abs(Wp)**2 - torch.abs(Sp)**2))
+        # loss = torch.linalg.norm(torch.abs(torch.abs(Wp)**2 - torch.abs(Sp)**2))
         loss = torch.mean((torch.log(Wp + 1e-8) - torch.log(Sp + 1e-8)) ** 2)
 
         return self.alpha * loss
-    
+
     def band_limited_loss(self, w, dt=0.004, f_low=5, f_high=60):
         Wf = torch.fft.rfft(w, dim=-1)
         freqs = torch.fft.rfftfreq(w.shape[-1], d=dt).to(w.device)
@@ -78,65 +86,67 @@ class DualTaskLoss(BaseLoss):
 
 
 class SeisAELoss(BaseLoss):
-    key_names = ['total']
+    key_names = ["total"]
 
     def __init__(self):
         self.key_names = SeisAELoss.key_names
         super().__init__()
 
     def __call__(self, s, s_rec):
-        loss_total = torch.norm((s - s_rec), p=2)**2 # ||s - s'|| ^ 2
+        loss_total = torch.norm((s - s_rec), p=2) ** 2  # ||s - s'|| ^ 2
 
         loss = {
-                'total': loss_total,
-               }
-        
+            "total": loss_total,
+        }
+
         return loss
 
 
 class WaveletDecoderLoss(BaseLoss):
-    key_names = ('total', 'spectral', 'smooth', 'band')
+    key_names = ("total", "spectral", "smooth", "band")
 
     def __init__(self, parameters):
         self.key_names = WaveletDecoderLoss.key_names
         super().__init__()
 
-        self.sigma = parameters['sigma']
-        self.alpha = parameters['alpha']
-        self.beta = parameters['beta']
-        self.gamma = parameters['gamma']
+        self.sigma = parameters["sigma"]
+        self.alpha = parameters["alpha"]
+        self.beta = parameters["beta"]
+        self.gamma = parameters["gamma"]
 
     def __call__(self, w, s):
-        loss_spectral = self.spectral_loss(w, s) # alpha * ||F(w') - F(s)|| ^ 2
-        smooth = torch.mean((w[:,:,1:] - w[:,:,:-1])**2) # gamma * delta w
-        #lap = w[:, :, 2:] - 2*w[:, :, 1:-1] + w[:, :, :-2]
-        #smooth = torch.mean(lap**2)
+        loss_spectral = self.spectral_loss(w, s)  # alpha * ||F(w') - F(s)|| ^ 2
+        smooth = torch.mean((w[:, :, 1:] - w[:, :, :-1]) ** 2)  # gamma * delta w
+        # lap = w[:, :, 2:] - 2*w[:, :, 1:-1] + w[:, :, :-2]
+        # smooth = torch.mean(lap**2)
         loss_smooth = self.gamma * smooth
-        
+
         loss_band = self.band_limited_loss(w)
 
         loss_total = loss_spectral + loss_smooth + loss_band
 
         loss = {
-                'total': loss_total,
-                'spectral': loss_spectral,
-                'smooth': loss_smooth,
-                'band': loss_band
-               }
-        
+            "total": loss_total,
+            "spectral": loss_spectral,
+            "smooth": loss_smooth,
+            "band": loss_band,
+        }
+
         print(loss)
-        
+
         return loss
 
     def supervised(self, w):
         ricker = ricker_wavelet(random.uniform(5, 125), 0.004, w.shape[-1])
-        loss_reconstruction = self.sigma * torch.norm((w - ricker), p=2)**2 # sigma * ||s - s'|| ^ 2
+        loss_reconstruction = (
+            self.sigma * torch.norm((w - ricker), p=2) ** 2
+        )  # sigma * ||s - s'|| ^ 2
 
         loss = {
-            'total': loss_reconstruction,
-            'spectral': torch.tensor(0.0),
-            'smooth': torch.tensor(0.0),
-            'band': torch.tensor(0.0)
+            "total": loss_reconstruction,
+            "spectral": torch.tensor(0.0),
+            "smooth": torch.tensor(0.0),
+            "band": torch.tensor(0.0),
         }
 
         return loss
@@ -145,8 +155,8 @@ class WaveletDecoderLoss(BaseLoss):
         Wf = torch.fft.rfft(w, dim=-1)
         Sf = torch.fft.rfft(s, dim=-1)
 
-        Wp = torch.abs(Wf)**2
-        Sp = torch.abs(Sf)**2
+        Wp = torch.abs(Wf) ** 2
+        Sp = torch.abs(Sf) ** 2
 
         Wp = torch.clamp(Wp, min=1e-8)
         Sp = torch.clamp(Sp, min=1e-8)
@@ -173,9 +183,9 @@ class WaveletDecoderLoss(BaseLoss):
             # voltar ao formato original
             Sp = Sp_interp.reshape(B, C, Fw)
 
-        loss = torch.mean((torch.log(Wp + 1e-8) - torch.log(Sp + 1e-8))**2)
+        loss = torch.mean((torch.log(Wp + 1e-8) - torch.log(Sp + 1e-8)) ** 2)
         return self.alpha * loss
-    
+
     def band_limited_loss(self, w, dt=0.004, f_low=3, f_high=40):
         Wf = torch.fft.rfft(w, dim=-1)
         freqs = torch.fft.rfftfreq(w.shape[-1], d=dt).to(w.device)
@@ -186,7 +196,7 @@ class WaveletDecoderLoss(BaseLoss):
 
 
 class TimeShiftLoss(BaseLoss):
-    key_names = ('total')
+    key_names = "total"
 
     def __init__(self):
         self.key_names = TimeShiftLoss.key_names
@@ -196,9 +206,8 @@ class TimeShiftLoss(BaseLoss):
         return torch.linalg.norm(ts - ts_syn)
 
 
-
 class MLPLoss(BaseLoss):
-    key_names = ('total', 'logcosh', 'cosine_similarity')
+    key_names = ("total", "logcosh", "cosine_similarity")
 
     def __init__(self):
         self.key_names = MLPLoss.key_names
@@ -212,11 +221,7 @@ class MLPLoss(BaseLoss):
         cs = torch.mean(cos(y, y_))
         cos_loss = 1.0 - cs
         total = lch + cos_loss
-        loss = {
-            'total': total,
-            'logcosh': lch,
-            'cosine_similarity': cs
-        }
+        loss = {"total": total, "logcosh": lch, "cosine_similarity": cs}
         return loss
 
     def logcosh(self, y, y_):
