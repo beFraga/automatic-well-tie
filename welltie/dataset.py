@@ -341,7 +341,7 @@ class MLPDataset(BaseDataset):
         - device: dispositivo destino do tensor ('cpu' ou 'cuda')
         """
         choice = random.choice(["ricker", "gabor", "ormsby", "klauder", "sinc"])
-        # choice = random.choice(["klauder"])
+        # choice = random.choice(["sinc"])
         f = random.uniform(5, 125)  # frequência principal
 
         if choice == "ricker":

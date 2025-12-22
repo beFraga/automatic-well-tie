@@ -28,19 +28,13 @@ params = parameters["mlp_wavelet"]
 SAVE_DIR = WORKDIR / "training"
 
 
-
-
 def train():
     start_time = time.time()
     print("----- Starting MLPWaveletExtractor Train -----")
     print("----- Generating Seismic Random Dataset -----")
-    seismicDataset = MLPDataset(params['train_sample'],
-                                {"train": True})
+    seismicDataset = MLPDataset(params["train_sample"], {"train": True})
     print(f"Generated {len(seismicDataset)} samples")
-    mlpwave = MLPWaveletModel(SAVE_DIR,
-                         seismicDataset,
-                         params,
-                         device=device)
+    mlpwave = MLPWaveletModel(SAVE_DIR, seismicDataset, params, device=device)
     mlpwave.train()
 
     print("Total training time (DualTask):")
@@ -49,31 +43,20 @@ def train():
     print(mlpwave.history["train_loss_total"])
     run()
 
+
 def run():
     print("----- Starting MLPWaveletExtractor Test -----")
     print("----- Generating Seismic Random Dataset -----")
-    dataset_args = {
-        "lasdir": LOGS_PATH,
-        "syfile": SEGY_FILE,
-        "train": False
-    }
-    seismicDataset = MLPDataset(params['train_sample'],
-                                dataset_args)
+    dataset_args = {"lasdir": LOGS_PATH, "syfile": SEGY_FILE, "train": False}
+    seismicDataset = MLPDataset(params["train_sample"], dataset_args)
     print(f"Generated {len(seismicDataset)} samples")
-    mlpwave = MLPWaveletModel(SAVE_DIR,
-                         seismicDataset,
-                         params,
-                         device=device)
+    mlpwave = MLPWaveletModel(SAVE_DIR, seismicDataset, params, device=device)
     mlpwave.load_network(mlpwave.save_dir / mlpwave.state_dict)
     results = mlpwave.run_test()
     plotar_amostras_como_curvas(results["s_"], results["s"], results["w"])
 
 
-
-switch = {
-    "train": train,
-    "run": run
-}
+switch = {"train": train, "run": run}
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

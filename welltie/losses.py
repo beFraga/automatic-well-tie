@@ -1,5 +1,7 @@
-import torch
 import random
+
+import torch
+
 from welltie.geophysics import ricker_wavelet
 
 

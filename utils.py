@@ -1,43 +1,187 @@
+from typing import Optional, Union
+
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
 
-def plotar_amostras_como_curvas(real, syn, solo):
+def _to_numpy(data: Union[np.ndarray, torch.Tensor]) -> np.ndarray:
+    """Converte torch.Tensor para numpy se necessário."""
+    if isinstance(data, torch.Tensor):
+        return data.detach().cpu().numpy()
+    return np.asarray(data)
+
+
+def _garantir_shape_2d(data: np.ndarray, nome: str = "array") -> np.ndarray:
     """
-    Plota cada linha dos arrays como uma curva separada.
-
-    - s (n,x) e s_syn (n,y) são plotados juntos para comparação.
-    - w (n,z) é plotado em um gráfico ao lado.
-    - O eixo X de cada curva terá uma "escala unitária" (0, 1, 2, ...).
-
-    Args:
-        s (np.array): Array (n, x) onde cada uma das 'n' linhas é uma amostra.
-        s_syn (np.array): Array (n, y) para comparação com 's'.
-        w (np.array): Array (n, z) para o gráfico individual.
+    Garante que o array tem exatamente 2 dimensões (n_amostras, n_features).
+    Cria cópia se necessário para evitar problemas de broadcast.
     """
-    for i in range(real.shape[0]):
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    data = np.atleast_1d(np.asarray(data))
 
-        ax1.plot(real[i], color="blue", alpha=0.7)
-        ax1.plot(syn[i], color="red", linestyle="--", alpha=0.7)
-        ax1.set_title(f"Plot {i}")
-        ax1.set_xlabel("Escala Unitária (índice dentro da amostra)")
+    if data.ndim == 1:
+        data = data.reshape(1, -1).copy()
+    elif data.ndim == 2:
+        data = data.copy()
+    else:
+        n_first = data.shape[0]
+        data = data.reshape(n_first, -1).copy()
+
+    return data
+
+
+def _alinhar_tamanhos_amostras(
+    real: np.ndarray, syn: np.ndarray, solo: np.ndarray
+) -> tuple:
+    """
+    Alinha os tamanhos dos arrays de amostras.
+
+    Problemas comuns:
+    - syn pode vir de convolução com tamanhos variáveis
+    - real, syn podem ter comprimentos diferentes
+
+    Estratégia: usar o menor tamanho comum para todas as amostras.
+    """
+    n_samples = min(real.shape[0], syn.shape[0], solo.shape[0])
+
+    # Pegar apenas as primeiras n_samples
+    real = real[:n_samples].copy()
+    syn = syn[:n_samples].copy()
+    solo = solo[:n_samples].copy()
+
+    # Encontrar o tamanho mínimo de features entre todos
+    # (cada amostra pode ter tamanho diferente)
+    min_feat_real_syn = min(real.shape[1], syn.shape[1])
+
+    # Truncar para o tamanho mínimo
+    real = real[:, :min_feat_real_syn].copy()
+    syn = syn[:, :min_feat_real_syn].copy()
+
+    return real, syn, solo
+
+
+def _calcular_metricas(real: np.ndarray, syn: np.ndarray) -> dict:
+    """Calcula RMSE e correlação entre sinais."""
+    # Garantir que têm o mesmo tamanho
+    min_len = min(len(real), len(syn))
+    real = real[:min_len]
+    syn = syn[:min_len]
+
+    rmse = np.sqrt(np.mean((real - syn) ** 2))
+    try:
+        correlacao = np.corrcoef(real, syn)[0, 1]
+        if np.isnan(correlacao):
+            correlacao = 0.0
+    except:
+        correlacao = 0.0
+    return {"rmse": rmse, "correlacao": correlacao}
+
+
+def plotar_amostras_como_curvas(
+    real: Union[np.ndarray, torch.Tensor],
+    syn: Union[np.ndarray, torch.Tensor],
+    solo: Union[np.ndarray, torch.Tensor],
+    dt: float = 0.002,
+    max_samples: Optional[int] = None,
+    save_path: Optional[str] = None,
+    show_metrics: bool = True,
+):
+    """
+    Plota amostras sísmicas (real vs sintética) junto com wavelets estimadas.
+
+    Parâmetros:
+    -----------
+    real : np.ndarray ou torch.Tensor
+        Array de sinais reais com shape (n_amostras, n_amostras_sinal)
+    syn : np.ndarray ou torch.Tensor
+        Array de sinais sintéticos com shape (n_amostras, n_amostras_sinal)
+        (pode ter tamanhos variáveis de convolução, será alinhado)
+    solo : np.ndarray ou torch.Tensor
+        Array de wavelets com shape (n_amostras, n_amostras_wavelet)
+    dt : float
+        Intervalo de amostragem em segundos (default: 0.002)
+    max_samples : int, optional
+        Número máximo de amostras a plotar. Se None, plota todas.
+    save_path : str, optional
+        Caminho para salvar as figuras. Se None, apenas exibe.
+    show_metrics : bool
+        Se True, exibe RMSE e correlação entre sinais reais e sintéticos
+    """
+    # Converter para numpy
+    real = _to_numpy(real)
+    syn = _to_numpy(syn)
+    solo = _to_numpy(solo)
+
+    # Garantir formato 2D
+    real = _garantir_shape_2d(real, "real")
+    syn = _garantir_shape_2d(syn, "syn")
+    solo = _garantir_shape_2d(solo, "solo")
+
+    # Alinhar tamanhos
+    real, syn, solo = _alinhar_tamanhos_amostras(real, syn, solo)
+
+    n_samples = real.shape[0]
+    n_to_plot = min(n_samples, max_samples or n_samples)
+    indices = range(n_to_plot)
+
+    for i in indices:
+        # Extrair amostra i
+        real_i = real[i]
+        syn_i = syn[i]
+        solo_i = solo[i]
+
+        # Garantir mesmo tamanho
+        min_len = min(len(real_i), len(syn_i))
+        real_i = real_i[:min_len]
+        syn_i = syn_i[:min_len]
+
+        t_s = np.arange(len(real_i)) * dt
+        t_w = (np.arange(len(solo_i)) - len(solo_i) // 2) * dt
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+
+        # --- SINAL ---
+        ax1.plot(t_s, real_i, color="blue", lw=1.2, label="Real")
+        ax1.plot(t_s, syn_i, color="red", lw=1.2, ls="--", label="Gerada")
+
+        erro = real_i - syn_i
+        ax1.plot(t_s, erro, color="black", lw=0.8, alpha=0.4, label="Erro")
+
+        # Título com métricas
+        titulo = f"Sinal sísmico – Amostra {i}"
+        if show_metrics:
+            metricas = _calcular_metricas(real_i, syn_i)
+            titulo += (
+                f" (RMSE: {metricas['rmse']:.4f}, Corr: {metricas['correlacao']:.4f})"
+            )
+
+        ax1.set_title(titulo)
+        ax1.set_xlabel("Tempo (s)")
         ax1.set_ylabel("Amplitude")
         ax1.grid(True)
-        ax2.set_ylim(-1, 1)
-        ax1.legend(["Real", "Gerada"], loc="upper right")
+        ax1.legend()
 
-        ax2.plot(solo[i])
-        ax2.set_title(f"Wavelet {i}")
-        ax2.set_xlabel("Escala Unitária (índice dentro da amostra)")
-        ax2.set_ylabel("Amplitude")
-        ax2.set_ylim(-1, 1)
+        # --- WAVELET ---
+        w = solo_i / (np.max(np.abs(solo_i)) + 1e-8)
+
+        ax2.plot(t_w, w, color="blue", lw=1.5)
+        ax2.axvline(0, color="k", linestyle=":", alpha=0.6)
+
+        ax2.set_title("Wavelet estimada")
+        ax2.set_xlabel("Tempo (s)")
+        ax2.set_ylabel("Amplitude (normalizado)")
+        ax2.set_ylim(-1.05, 1.05)
         ax2.grid(True)
 
         plt.tight_layout()
 
-        plt.show()
+        if save_path:
+            fig.savefig(
+                f"{save_path}_amostra_{i:03d}.png", dpi=100, bbox_inches="tight"
+            )
+            plt.close(fig)
+        else:
+            plt.show()
 
 
 def adjust_data_length(data, target_length=300, device="cpu"):
