@@ -1,5 +1,8 @@
 datasets
 venv
+.venv
+codigos_exemplo
 __pycache__
 *.ipynb
+.idea
 training
