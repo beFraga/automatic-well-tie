@@ -1,6 +1,9 @@
 import torch
-import random
+import torch.nn.functional as F
 from welltie.geophysics import ricker_wavelet
+
+from utils import normalization, apply_ormsby_frequency_domain
+from utils_spectrum import get_power_spectra, get_freqs
 
 class BaseLoss(object):
     key_names = None
@@ -12,177 +15,97 @@ class BaseLoss(object):
             raise NotImplementedError("The key `total` must be present for backdrop")
 
 class DualTaskLoss(BaseLoss):
-    key_names = ('total', 'reconstruction', 'spectral', 'smooth')
+    key_names = ('total', 'reconstruction', 'spectral')
 
     def __init__(self, parameters):
         self.key_names = DualTaskLoss.key_names
         super().__init__()
 
-        self.sigma = parameters['sigma']
         self.alpha = parameters['alpha']
-        self.beta = parameters['beta']
-        self.gamma = parameters['gamma']
+
+        self.dt = parameters["dt"]
+        self.duration = parameters["duration"]
+
+        self.f_min = 5.0
+        self.f_max = 80.0
 
     def __call__(self, s, s_rec, w):
-        loss_reconstruction = self.sigma * torch.mean((s - s_rec) ** 2) # sigma * ||s - s'|| ^ 2
+        loss_reconstruction = F.mse_loss(s, s_rec) # ||s - s'|| ^ 2
 
         loss_spectral = self.spectral_loss(w, s) # alpha * ||F(w') - F(s)|| ^ 2
 
-        loss_smooth = self.gamma * torch.mean((w[:,:,1:] - w[:,:,:-1]) ** 2) # gamma * sum(w_i - w_i-1) ^ 2
-        
-        loss_band = self.band_limited_loss(w)
 
-        loss_total = loss_reconstruction + loss_spectral + loss_smooth + loss_band
+        loss_total = loss_reconstruction + self.alpha * loss_spectral
 
         loss = {
                 'total': loss_total,
                 'reconstruction': loss_reconstruction,
                 'spectral': loss_spectral,
-                'smooth': loss_smooth
                }
-        
         return loss
 
 
-    def spectral_loss(self, w, s):
-        Wf = torch.fft.rfft(w, dim=-1)
-        Sf = torch.fft.rfft(s, dim=-1)
+    def pre_train(self, s, s_rec, w):
+        loss_reconstruction = F.mse_loss(s, s_rec) # ||s - s'|| ^ 2
 
-        # converte em módulo ou potência
-        Wp = torch.abs(Wf)**2
-        Sp = torch.abs(Sf)**2
+        ricker = ricker_wavelet(30, self.dt, w.shape[-1]).to(w.device)
+        ricker = ricker.reshape(1, 1, -1)
+        ricker_batch = ricker.expand(w.shape[0], -1, -1)
 
-        # normaliza cada batch individualmente (para evitar dominância de amplitude)
-        Wp = Wp / (torch.max(Wp, dim=-1, keepdim=True).values + 1e-8)
-        Sp = Sp / (torch.max(Sp, dim=-1, keepdim=True).values + 1e-8)
+        wmax = torch.max(torch.abs(w), dim=-1, keepdim=True)[0] + 1e-8
+        rmax = torch.max(torch.abs(ricker_batch), dim=-1, keepdim=True)[0] + 1e-8
 
-        # reamostra para o mesmo tamanho (wavelet e sísmica podem ter tamanhos diferentes)
-        if Wp.shape[-1] != Sp.shape[-1]:
-            Sp = torch.nn.functional.interpolate(
-                Sp, size=Wp.shape[-1], mode="linear", align_corners=False
-            ).squeeze(1)
-
-        # loss espectral: ||F(w') - F(s)|| ^ 2
-        #loss = torch.linalg.norm(torch.abs(torch.abs(Wp)**2 - torch.abs(Sp)**2))
-        loss = torch.mean((torch.log(Wp + 1e-8) - torch.log(Sp + 1e-8)) ** 2)
-
-        return self.alpha * loss
-    
-    def band_limited_loss(self, w, dt=0.004, f_low=5, f_high=60):
-        Wf = torch.fft.rfft(w, dim=-1)
-        freqs = torch.fft.rfftfreq(w.shape[-1], d=dt).to(w.device)
-
-        mask = ((freqs < f_low) | (freqs > f_high)).float()
-        outside_energy = torch.mean((torch.abs(Wf) * mask) ** 2)
-        return self.beta * outside_energy
-
-
-class SeisAELoss(BaseLoss):
-    key_names = ['total']
-
-    def __init__(self):
-        self.key_names = SeisAELoss.key_names
-        super().__init__()
-
-    def __call__(self, s, s_rec):
-        loss_total = torch.norm((s - s_rec), p=2)**2 # ||s - s'|| ^ 2
-
+        loss_total = F.mse_loss(w / wmax, ricker_batch / rmax) + loss_reconstruction
         loss = {
-                'total': loss_total,
-               }
-        
-        return loss
-
-
-class WaveletDecoderLoss(BaseLoss):
-    key_names = ('total', 'spectral', 'smooth', 'band')
-
-    def __init__(self, parameters):
-        self.key_names = WaveletDecoderLoss.key_names
-        super().__init__()
-
-        self.sigma = parameters['sigma']
-        self.alpha = parameters['alpha']
-        self.beta = parameters['beta']
-        self.gamma = parameters['gamma']
-
-    def __call__(self, w, s):
-        loss_spectral = self.spectral_loss(w, s) # alpha * ||F(w') - F(s)|| ^ 2
-        smooth = torch.mean((w[:,:,1:] - w[:,:,:-1])**2) # gamma * delta w
-        #lap = w[:, :, 2:] - 2*w[:, :, 1:-1] + w[:, :, :-2]
-        #smooth = torch.mean(lap**2)
-        loss_smooth = self.gamma * smooth
-        
-        loss_band = self.band_limited_loss(w)
-
-        loss_total = loss_spectral + loss_smooth + loss_band
-
-        loss = {
-                'total': loss_total,
-                'spectral': loss_spectral,
-                'smooth': loss_smooth,
-                'band': loss_band
-               }
-        
-        print(loss)
-        
-        return loss
-
-    def supervised(self, w):
-        ricker = ricker_wavelet(random.uniform(5, 125), 0.004, w.shape[-1])
-        loss_reconstruction = self.sigma * torch.norm((w - ricker), p=2)**2 # sigma * ||s - s'|| ^ 2
-
-        loss = {
-            'total': loss_reconstruction,
-            'spectral': torch.tensor(0.0),
-            'smooth': torch.tensor(0.0),
-            'band': torch.tensor(0.0)
+            'total': loss_total,
+            'reconstruction': loss_reconstruction,
+            'spectral': torch.tensor(0.0)
         }
-
         return loss
 
     def spectral_loss(self, w, s):
-        Wf = torch.fft.rfft(w, dim=-1)
-        Sf = torch.fft.rfft(s, dim=-1)
+        duration = self.duration[-1] - self.duration[0]
+        #spec_s = get_amplitude_spectra(s, duration, self.dt)
+        #spec_w = get_amplitude_spectra(w, duration, self.dt)
+        spec_s = get_power_spectra(s, duration, self.dt)
+        spec_w = get_power_spectra(w, duration, self.dt)
 
-        Wp = torch.abs(Wf)**2
-        Sp = torch.abs(Sf)**2
 
-        Wp = torch.clamp(Wp, min=1e-8)
-        Sp = torch.clamp(Sp, min=1e-8)
+        mean_s = torch.sum(spec_s, dim=0) / spec_s.shape[0]
+        #pool_s = moving_average(mean_s, 64)
+        pool_s = torch.avg_pool1d(mean_s, kernel_size=65, stride=1, padding=32)
+        pool_s = torch.avg_pool1d(pool_s, kernel_size=65, stride=1, padding=32)
+        pool_s = torch.avg_pool1d(pool_s, kernel_size=65, stride=1, padding=32)
 
-        Wp = Wp / (torch.max(Wp, dim=-1, keepdim=True).values + 1e-8)
-        Sp = Sp / (torch.max(Sp, dim=-1, keepdim=True).values + 1e-8)
+        freqs = get_freqs(duration, self.dt)
+        filtered_s, _ = apply_ormsby_frequency_domain(pool_s, freqs)
 
-        Fw = Wp.shape[-1]
-        Fs = Sp.shape[-1]
+        norm_s = normalization(filtered_s)
+        norm_w = normalization(spec_w)
 
-        if Fw != Fs:
-            # reshape para interpolar corretamente
-            B, C, _ = Sp.shape
-            Xs_1d = Sp.reshape(B * C, 1, Fs)
+        batch_s = norm_s.reshape(1, 1, -1)
+        batch_s = batch_s.expand(norm_w.shape[0], -1, -1)
+        batch_s = batch_s[..., :norm_w.shape[-1]]
 
-            # interpolate para match de frequências
-            Sp_interp = torch.nn.functional.interpolate(
-                Xs_1d,
-                size=Fw,
-                mode="linear",
-                align_corners=False,
-            )
+        #plot_2j(norm_s[0].detach().numpy(), norm_w[0, 0].detach().numpy())
 
-            # voltar ao formato original
-            Sp = Sp_interp.reshape(B, C, Fw)
+        loss = F.mse_loss(batch_s, norm_w)
 
-        loss = torch.mean((torch.log(Wp + 1e-8) - torch.log(Sp + 1e-8))**2)
-        return self.alpha * loss
-    
-    def band_limited_loss(self, w, dt=0.004, f_low=3, f_high=40):
-        Wf = torch.fft.rfft(w, dim=-1)
-        freqs = torch.fft.rfftfreq(w.shape[-1], d=dt).to(w.device)
+        # mask = (freqs >= self.f_min) & (freqs <= self.f_max)
 
-        mask = ((freqs < f_low) | (freqs > f_high)).float()
-        outside_energy = torch.mean((torch.abs(Wf) * mask) ** 2)
-        return self.beta * outside_energy
+        # if mask.sum() == 0:
+        #     mask[:] = True
+
+        # max_w = torch.max(spec_w[..., mask], dim=-1, keepdim=True)[0] + 1e-8
+        # max_s = torch.max(spec_s[..., mask], dim=-1, keepdim=True)[0] + 1e-8
+
+        # norm_w = spec_w / max_w
+        # norm_s = spec_s / max_s
+
+        #plot_2j(norm_s[0, 0].detach().numpy(), norm_w[0, 0].detach().numpy())
+        # loss = F.mse_loss(norm_s[..., mask], norm_w[..., mask])
+
+        return loss
 
 
 class TimeShiftLoss(BaseLoss):

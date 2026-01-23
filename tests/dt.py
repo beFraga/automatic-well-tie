@@ -1,6 +1,6 @@
 from welltie.dataset import SeismicDataset
 from welltie.model import DualModel
-from utils import plotar_amostras_como_curvas, plot
+from utils import plotar_amostras_como_curvas, plot, plot_axis
 
 import torch
 import sys
@@ -33,32 +33,36 @@ def train():
     start_time = time.time()
     print("----- Starting DualTaskAE Train -----")
     print("----- Generating Seismic Noise Dataset -----")
-    seismicDataset = SeismicDataset({"syfile": SEGY_FILE, "train_size": params["train_sample"]})
+    dataset = SeismicDataset({"syfile": SEGY_FILE, "lasdir": LOGS_PATH, "train_size": params["train_sample"]}, batch_size=params['batch_size'])
 
-    print(f"Generated {len(seismicDataset)} samples")
-    dualTask = DualModel(SAVE_DIR, seismicDataset, params, device=device)
-    dualTask.train()
+    print(f"Generated {len(dataset)} samples")
+    model = DualModel(SAVE_DIR, dataset, params, device=device)
+    model.train()
 
     print("Total training time (DualTask):")
     print(time.time() - start_time)
     print("Loss total (DualTask):")
-    print(dualTask.history["train_loss_total"])
-    run()
+    print(model.history["train_loss_total"])
+    run(dataset=dataset)
 
 
 
-def run():
+def run(dataset=None):
+        
     start_time = time.time()
     print("----- Starting DualTaskAE Test -----")
+    if dataset is None:
+        dataset = SeismicDataset({"syfile": SEGY_FILE, "lasdir": LOGS_PATH, "train_size": params["train_sample"]})
     print("----- Generating Seismic Noise Dataset -----")
-    seismicDataset = SeismicDataset({"syfile": SEGY_FILE, "train_size": params["train_sample"]})
 
-    print(f"Generated {len(seismicDataset)} samples")
-    dualTask = DualModel(SAVE_DIR, seismicDataset, params)
-    dualTask.load_network(dualTask.save_dir / dualTask.state_dict)
-    plot(dualTask.net.wavelet_branch[-1].weight.detach().cpu().numpy()[0,0,:])
-    results = dualTask.run_test()
+    print(f"Generated {len(dataset)} samples")
+    model = DualModel(SAVE_DIR, dataset, params)
+    model.load_network(model.save_dir / model.state_dict)
+    results = model.run_test()
     plotar_amostras_como_curvas(results["s"], results["s_syn"], results["w"])
+    print(results["x"].shape)
+    print(results["w_spec"].shape)
+    plot_axis(results["x"], results["w_spec"])
 
 
 switch = {
@@ -67,4 +71,4 @@ switch = {
 }
 
 if __name__ == "__main__":
-    sys.exit(switch[sys.argv[0]]())
+    sys.exit(switch[sys.argv[1]]())

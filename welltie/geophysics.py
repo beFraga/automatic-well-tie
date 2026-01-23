@@ -26,13 +26,16 @@ def distort_tdr(tdr, sigma=5, scale=10):
 def add_awgn(s, snr_db):
     s_power = np.mean(s**2)
 
+    if s_power == 0:
+        return s, np.zeros_like(s)
+
     snr_linear = 10**(snr_db/10)
     noise_power = s_power / snr_linear
-    
-    noise = np.random.normal(0, np.sqrt(noise_power), size=s.shape)
+    noise_std = np.sqrt(max(noise_power, 1e-12))
+    noise = np.random.normal(0, noise_std, size=s.shape)
     noisy_s = s + noise
 
-    return noisy_s, noise
+    return noisy_s.astype(np.float32), noise.astype(np.float32)
 
 def generate_distort_tdr(tdr, n):
     tdrs = torch.tensor(())
@@ -94,17 +97,4 @@ def sinc_wavelet(f, dt, nt):
     w = torch.where(t == 0, torch.tensor(1.0, device=t.device), torch.sin(2 * math.pi * f * t) / (2 * math.pi * f * t))
     return w / torch.max(torch.abs(w))
 
-
-def power_spectrum(a):
-    a = torch.tensor(a)
-    af = torch.fft.rfft(a, dim=-1)
-
-    ap = torch.abs(af)**2
-
-    ap = torch.clamp(ap, min=1e-8)
-
-    ap = ap / (torch.sum(ap, dim=-1, keepdim=True) + 1e-8)
-
-    return ap
-
-__all__ = ['extract_impedance', 'extract_reflectivity', 'extract_seismic', 'distort_tdr', 'add_awgn', 'generate_distort_tdr', 'ricker_wavelet', 'gabor_wavelet', 'ormsby_wavelet', 'klauder_wavelet', 'sinc_wavelet', 'power_spectrum']
+__all__ = ['extract_impedance', 'extract_reflectivity', 'extract_seismic', 'distort_tdr', 'add_awgn', 'generate_distort_tdr', 'ricker_wavelet', 'gabor_wavelet', 'ormsby_wavelet', 'klauder_wavelet', 'sinc_wavelet']

@@ -53,10 +53,19 @@ class BaseDataset(Dataset):
 class SeismicDataset(BaseDataset):
     def __init__(self, args, train_ratio=0.7, val_ratio=0.2, batch_size=32):
         n_seis = []
+
+        xs, ys, locs = take_coordinates_trace(args["lasdir"], args["syfile"])
         with segyio.open(args["syfile"], "r", strict=False) as f:
-            idx = np.random.choice(f.tracecount, size=args["train_size"], replace=False)
-            seis_subset = np.array(f.trace, dtype=np.float32)[idx]
-            self.s      = torch.tensor(seis_subset, dtype=torch.float32).unsqueeze(1)
+            self.dt = float(segyio.tools.dt(f)) * 1e-6
+            try:
+                t0_ms = float(f.header[0][segyio.TraceField.DelayRecordingTime])
+            except Exception:
+                t0_ms = 0.0
+
+            t0_s = t0_ms * 1e-3
+            self.duration = t0_s + np.arange(int(f.samples.size), dtype=np.float64) * self.dt
+            seis_subset = take_closers_trace_well(locs, xs, ys, args["syfile"], k=int(args["train_size"]/len(locs)))
+            self.s = torch.tensor(seis_subset, dtype=torch.float32).unsqueeze(1)
             for s in seis_subset:
                 db_random = np.random.normal(30, 8)
                 n_s, shift = add_awgn(s, db_random)
@@ -68,12 +77,23 @@ class SeismicDataset(BaseDataset):
 
         N = len(full_dataset)
         n_train = int(train_ratio * N)
-        n_val = int(val_ratio * N)
-        n_test = N - n_train - n_val
+        n_val = N - n_train
 
-        self.train_set, self.val_set, self.test_set = random_split(
-            full_dataset, [n_train, n_val, n_test]
+        self.train_set, self.val_set = random_split(
+            full_dataset, [n_train, n_val]
         )
+
+        test_data = take_well_trace(locs, xs, ys, args["syfile"])
+        zeros = torch.zeros(test_data.shape)
+        self.test_set = TensorDataset(test_data, zeros)
+
+
+        # n_val = int(val_ratio * N)
+        # n_test = N - n_train - n_val
+
+        # self.train_set, self.val_set, self.test_set = random_split(
+        #     full_dataset, [n_train, n_val, n_test]
+        # )
 
         self.train_loader = DataLoader(self.train_set, batch_size=batch_size, shuffle=True)
         self.val_loader   = DataLoader(self.val_set, batch_size=batch_size//2, shuffle=False)
@@ -88,44 +108,6 @@ class SeismicDataset(BaseDataset):
 
     def __getitem__(self, idx):
         return self.s[idx], self.s_noise[idx]
-
-
-class WaveletExtractorDataset(BaseDataset):
-    def __init__(self, args, train_ratio=0.7, val_ratio=0.2, batch_size=32):
-        
-        with segyio.open(args['syfile'], "r", strict=False) as f:
-            idx = np.random.choice(f.tracecount, size=args['train_size'], replace=False)
-            seis_subset = np.array(f.trace, dtype=np.float32)[idx]
-            self.s = torch.tensor(seis_subset, dtype=torch.float32).unsqueeze(1)
-            self.l = args["model"].encode(self.s)
-        print(self.s.shape)
-        print(self.l.shape)
-
-        full_dataset = TensorDataset(self.s, self.l)
-
-        N = len(full_dataset)
-        n_train = int(train_ratio * N)
-        n_val = int(val_ratio * N)
-        n_test = N - n_train - n_val
-
-        self.train_set, self.val_set, self.test_set = random_split(
-            full_dataset, [n_train, n_val, n_test]
-        )
-
-        self.train_loader = DataLoader(self.train_set, batch_size=batch_size, shuffle=True)
-        self.val_loader   = DataLoader(self.val_set, batch_size=batch_size//2, shuffle=False)
-        self.test_loader  = DataLoader(self.test_set, batch_size=batch_size//2, shuffle=False)
-    
-
-    def get_loaders(self):
-        return self.train_loader, self.val_loader, self.test_loader
-
-    def __len__(self):
-        return len(self.s)
-
-    def __getitem__(self, idx):
-        return self.s[idx], self.l[idx]
-
 
         
 class TimeShiftDataset(BaseDataset):
@@ -271,11 +253,8 @@ class MLPDataset(BaseDataset):
     
 
 
-
-
-def seismic_well_dataset_generator(lasdir, syfile, distortions):
+def take_coordinates_trace(lasdir, syfile):
     locs = []
-    seismics = []
     for lasfile in lasdir.iterdir():
         las = lasio.read(lasfile)
         loc = list(map(float, las.well['LOC'].value.replace(" ", "").split("X=")[1].split("Y=")))
@@ -284,23 +263,27 @@ def seismic_well_dataset_generator(lasdir, syfile, distortions):
     with segyio.open(syfile, "r", strict=False) as f:
         xs = np.array([f.header[i][segyio.TraceField.CDP_X] for i in range(f.tracecount)])
         ys = np.array([f.header[i][segyio.TraceField.CDP_Y] for i in range(f.tracecount)])
+        return xs, ys, locs
+
+def take_closers_trace_well(locs, xs, ys, syfile, k=1000):
+    indices = []
+    for loc in locs:
+        distances = np.sqrt((xs - loc[0])**2 + (ys - loc[1])**2)
+        ind = np.argpartition(distances, k)[:k]
+        ind = ind[np.argsort(distances[ind])]
+        indices.append(ind)
+    indices = np.unique(np.array(indices).reshape(-1))
+    seismics = []
+    with segyio.open(syfile, "r", strict=False) as f:
+        seismics = [f.trace[i] for i in indices]
+    return np.array(seismics)
+
+
+def take_well_trace(locs, xs, ys, syfile):
+    seismics = []
+    with segyio.open(syfile, "r", strict=False) as f:
         for loc in locs:
             distances = np.sqrt((xs - loc[0])**2 + (ys - loc[1])**2)
             closest_trace_idx = np.argmin(distances)
             seismics.append(f.trace[closest_trace_idx])
-    n_seis = []
-    for s in seismics:
-        s = np.array(s, dtype=np.float32)
-        for i in range(distortions):
-            db_random = np.random.normal(30, 8)
-            n_s, shift = add_awgn(s, db_random)
-            n_seis.append(n_s)
-    return SeismicDataset(n_seis)
-
-def timeshift_dataset_generator(vp, rho, s, w, ts):
-    z = extract_impedance(rho, vp)
-    r = extract_reflectivity(z)
-    s_syn = extract_seismic(r, w)
-
-    dataset = TimeShiftDataset(s, s_syn, ts)
-    return dataset
+    return torch.tensor(np.array(seismics), dtype=torch.float32).unsqueeze(1)

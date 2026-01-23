@@ -1,4 +1,3 @@
-from typing import override
 import torch
 
 import time
@@ -6,10 +5,12 @@ import pickle
 import numpy as np
 from tqdm import tqdm
 
-from welltie.network import DualTaskAE, TimeShiftPredictor, MLPWaveletExtractor, SeisAE, WaveletDecoder
-from welltie.losses import DualTaskLoss, TimeShiftLoss, MLPLoss, SeisAELoss, WaveletDecoderLoss
+from welltie.network import DualTaskAE, TimeShiftPredictor, MLPWaveletExtractor
+from welltie.losses import DualTaskLoss, TimeShiftLoss, MLPLoss
 from welltie.geophysics import extract_seismic
 
+from utils import plot, normalization, apply_ormsby_frequency_domain
+from utils_spectrum import get_amplitude_spectra, get_freqs
 
 class BaseModel:
     def __init__(self, save_dir, dataset, parameters, device=None):
@@ -25,7 +26,7 @@ class BaseModel:
         self.learning_rate = parameters["learning_rate"]
         self.batch_size = parameters["batch_size"]
         self.max_epochs = parameters["max_epochs"]
-
+ 
         self.train_dataset, self.val_dataset, self.test_dataset = dataset.get_loaders()
 
         if device is None:
@@ -94,6 +95,16 @@ class DualModel(BaseModel):
         self.net = DualTaskAE()
         self.net.to(self.device)
 
+        self.params["loss"]["dt"] = dataset.dt
+        self.params["loss"]["duration"] = dataset.duration
+
+        self.pre_train_epochs = self.params["pre_train_epochs"]
+
+        s, _ = next(iter(self.train_dataset))
+        latent_shape = self.net.encoder(s).shape[-1]
+        torch.manual_seed(0)
+        self.unit = torch.randn(8, latent_shape).to(self.device)
+
         self.loss = DualTaskLoss(self.params["loss"])
 
         self.optimizer = torch.optim.Adam(
@@ -112,7 +123,30 @@ class DualModel(BaseModel):
             self.history["train_loss_" + key] = []
             self.history["val_loss_" + key] = []
 
-    @override
+
+    def train(self):
+        _div = len(self.train_dataset) / self.batch_size
+        _remain = int(len(self.train_dataset) % self.batch_size > 0)
+        num_it_per_epoch = _div + _remain
+
+        for e in tqdm(range(self.start_epoch, self.max_epochs + self.pre_train_epochs)):
+            if self.cur_epoch < self.pre_train_epochs:
+                self.pre_train()
+            else:
+                self.train_one_epoch()
+            # current_val_loss = self.validate_training()
+
+            if self.schedulers:
+                for sche in self.schedulers:
+                    sche.step()
+
+            self.cur_epoch += 1
+
+        self.history["elapsed"] = time.time() - self.start_time
+        self.save_history()
+        self.save_network(self.save_dir / self.state_dict)
+
+
     def train_one_epoch(self):
         self.net.train()
 
@@ -126,10 +160,16 @@ class DualModel(BaseModel):
             self.optimizer.zero_grad()
 
             # Move tensores para a GPU
-            s = s.to(self.device)
             s_noise = s_noise.to(self.device)
+            s = s.to(self.device)
+
+            s_noise = normalization(s_noise)
+            s = normalization(s)
 
             s_syn, w = self.net(s_noise)
+
+            s_syn = s_syn.to(self.device)
+            w = w.to(self.device)
 
             loss = self.loss(s, s_syn, w)
             loss["total"].backward()
@@ -141,6 +181,46 @@ class DualModel(BaseModel):
         for key in self.loss.key_names:
             _avg_numeric_loss = loss_numerics[key] / count_loop
             self.history["train_loss_" + key].append(_avg_numeric_loss)
+
+
+
+    def pre_train(self):
+        self.net.train()
+
+        loss_numerics = {}
+        for key in self.loss.key_names:
+            loss_numerics[key] = 0.0
+
+        count_loop = 0
+        for s, s_noise in self.train_dataset:
+            count_loop += 1
+            self.optimizer.zero_grad()
+
+            # Move tensores para a GPU
+            s_noise = s_noise.to(self.device)
+            s = s.to(self.device)
+
+            s_noise = normalization(s_noise)
+            s = normalization(s)
+
+            s_syn, w = self.net(s_noise)
+
+            s_syn = s_syn.to(self.device)
+            w = w.to(self.device)
+
+            loss = self.loss.pre_train(s, s_syn, w)
+            loss["total"].backward()
+            self.optimizer.step()
+            if self.cur_epoch == self.pre_train_epochs - 1 and count_loop == 1:
+                plot(w[0, 0].detach().numpy())
+
+            for key in self.loss.key_names:
+                loss_numerics[key] += loss[key].item()
+
+        for key in self.loss.key_names:
+            _avg_numeric_loss = loss_numerics[key] / count_loop
+            self.history["train_loss_" + key].append(_avg_numeric_loss)
+
 
     def validate_training(self):
         loss_numerics = {}
@@ -167,283 +247,33 @@ class DualModel(BaseModel):
         return loss_numerics["total"] / count_loop
 
     def run_test(self):
-        result = {"s": [], "s_syn": [], "w": []}
-        with torch.no_grad():
-            for s, s_noise in self.test_dataset:
-                # Move tensores para a GPU
-                s = s.to(self.device)
-                s_noise = s_noise.to(self.device)
+        result = {"s": [], "s_syn": [], "w": [], "w_spec": [], "x": None}
 
-                s_syn, w = self.net(s_noise)
+        self.net.eval()
+
+        with torch.no_grad():
+            duration = self.params["loss"]["duration"][-1] - self.params["loss"]["duration"][0]
+            result["x"] = get_freqs(duration, self.params["loss"]["dt"])
+            for s, _ in self.test_dataset:
+                # Move tensores para a GPU
+                s = normalization(s).to(self.device)
+                s_syn, w = self.net(s)
+                w = w.to(self.device)
+                spec_w = get_amplitude_spectra(w, duration, self.params["loss"]["dt"])
+                filtered_w, _ = apply_ormsby_frequency_domain(spec_w, result["x"])
+                new_w = torch.fft.irfft(filtered_w, n=w.shape[-1])
+                new_w = torch.roll(new_w, shifts=new_w.shape[-1] // 2, dims=-1)
+
                 result["s_syn"].append(np.squeeze(s_syn.detach().cpu().numpy()))
-                result["w"].append(np.squeeze(w.detach().cpu().numpy()))
+                result["w"].append(np.squeeze(new_w.detach().cpu().numpy()))
+                result["w_spec"].append(np.squeeze(filtered_w.detach().cpu().numpy()))
                 result["s"].append(np.squeeze(s.detach().cpu().numpy()))
 
         result["s"] = np.concatenate(result["s"], axis=0)
-        print(result["s"].shape)
         result["s_syn"] = np.concatenate(result["s_syn"], axis=0)
         result["w"] = np.concatenate(result["w"], axis=0)
-        print(result["w"].shape)
+        result["w_spec"] = np.concatenate(result["w_spec"], axis=0)
         return result
-
-
-class SeisAEModel(BaseModel):
-
-
-    def __init__(self, save_dir,
-                       dataset,
-                       parameters,
-                       device = None):
-
-        super().__init__(save_dir,
-                         dataset,
-                         parameters,
-                         device = device)
-        
-        self.state_dict = "seisaemodel_state_dict.pt"
-        self.history_file = "seisaemodel_history.pkl"
-        self.net = SeisAE()
-        self.net.to(self.device)
-
-        self.loss = SeisAELoss()
-
-        self.optimizer = torch.optim.Adam(params=self.net.parameters(), lr=self.learning_rate)
-
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer,
-                                                       parameters['lr_decay_every_n_epoch'],
-                                                       gamma=parameters['lr_decay_rate'])
-        self.schedulers = [lr_scheduler]
-
-        self.history = {}
-        for key in self.loss.key_names:
-            self.history['train_loss_' + key] = []
-            self.history['val_loss_' + key] = []
-
-
-    def train_one_epoch(self):
-        self.net.train()
-
-        loss_numerics = {}
-        for key in self.loss.key_names:
-            loss_numerics[key] = 0.0
-
-        count_loop = 0
-        for s, s_noise in self.train_dataset:
-            count_loop += 1
-            self.optimizer.zero_grad()
-
-            s_syn = self.net(s_noise)
-
-            loss = self.loss(s, s_syn)
-            loss['total'].backward()
-            self.optimizer.step()
-
-            for key in self.loss.key_names:
-                loss_numerics[key] += loss[key].item()
-
-        for key in self.loss.key_names:
-            _avg_numeric_loss = loss_numerics[key] / count_loop
-            self.history['train_loss_' + key].append(_avg_numeric_loss)
-    
-
-    def validate_training(self):
-        loss_numerics = {}
-        for key in self.loss.key_names:
-            loss_numerics[key] = 0.0
-
-        count_loop = 0
-        with torch.no_grad():
-            self.net.eval()
-            for s, s_noise in self.val_dataset:
-                count_loop += 1
-
-                s_syn = self.net(s_noise)
-
-                loss = self.loss(s, s_syn)
-
-                for key in self.loss.key_names:
-                    loss_numerics[key] += loss[key].item()
-
-            for key in self.loss.key_names:
-                _avg_numeric_loss = loss_numerics[key] / count_loop
-                self.history['train_loss_' + key].append(_avg_numeric_loss)
-
-        return loss_numerics['total'] / count_loop
-
-    
-    def run_test(self):
-        result = {
-            "s": [],
-            "s_syn": [],
-        }
-        with torch.no_grad():
-            for s, s_noise in self.test_dataset:
-                s_syn = self.net(s_noise)
-                result["s_syn"].append(np.squeeze(s_syn))
-                result["s"].append(np.squeeze(s_noise))
-        result["s"] = np.concatenate(result["s"], axis=0)
-        result["s_syn"] = np.concatenate(result["s_syn"], axis=0)
-        return result
-    
-    
-    def encode(self, s):
-        return self.net.encode(s)
-
-
-class WaveletDecoderModel(BaseModel):
-
-
-    def __init__(self, save_dir,
-                       dataset,
-                       parameters,
-                       device = None):
-
-        super().__init__(save_dir,
-                         dataset,
-                         parameters,
-                         device = device)
-        
-        self.state_dict = "wavelet_decoder_state_dict.pt"
-        self.history_file = "wavelet_decoder_history.pkl"
-        self.net = WaveletDecoder()
-        self.net.to(self.device)
-
-        self.split_epoch = int(0.2 * self.max_epochs)
-
-        self.loss = WaveletDecoderLoss(self.params['loss'])
-
-        self.optimizer = torch.optim.Adam(params=self.net.parameters(), lr=self.learning_rate)
-
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer,
-                                                       parameters['lr_decay_every_n_epoch'],
-                                                       gamma=parameters['lr_decay_rate'])
-        self.schedulers = [lr_scheduler]
-
-        self.history = {}
-        for key in self.loss.key_names:
-            self.history['train_loss_' + key] = []
-            self.history['val_loss_' + key] = []
-
-    def train(self):
-        _div = len(self.train_dataset) / self.batch_size
-        _remain = int(len(self.train_dataset) % self.batch_size > 0)
-        num_it_per_epoch = _div + _remain
-        print('epochs: ' + str(self.max_epochs))
-        for e in tqdm(range(self.start_epoch, self.max_epochs)):
-            if self.cur_epoch < self.split_epoch:
-                self.supervised_train()
-            else:
-                self.train_one_epoch()
-            # current_val_loss = self.validate_training()
-
-            if self.schedulers:
-                for sche in self.schedulers:
-                    sche.step()
-            
-            self.cur_epoch += 1
-        
-        self.history["elapsed"] = time.time() - self.start_time
-        self.save_history()
-        self.save_network(self.save_dir / self.state_dict)
-
-
-    def train_one_epoch(self):
-        self.net.train()
-
-        loss_numerics = {}
-        for key in self.loss.key_names:
-            loss_numerics[key] = 0.0
-
-        count_loop = 0
-        for s, l in self.train_dataset:
-            count_loop += 1
-            self.optimizer.zero_grad()
-
-            l = l.detach()
-            s = s.detach()
-
-            w = self.net(l)
-
-            loss = self.loss(w, s)
-            loss['total'].backward()
-            self.optimizer.step()
-
-            for key in self.loss.key_names:
-                loss_numerics[key] += loss[key].item()
-
-        for key in self.loss.key_names:
-            _avg_numeric_loss = loss_numerics[key] / count_loop
-            self.history['train_loss_' + key].append(_avg_numeric_loss)
-
-    def supervised_train(self):
-        self.net.train()
-
-        loss_numerics = {}
-        for key in self.loss.key_names:
-            loss_numerics[key] = 0.0
-
-        count_loop = 0
-        for s, l in self.train_dataset:
-            count_loop += 1
-            self.optimizer.zero_grad()
-
-            l = l.detach()
-            s = s.detach()
-
-            w = self.net(l)
-
-            loss = self.loss.supervised(w)
-            loss['total'].backward()
-            self.optimizer.step()
-
-            for key in self.loss.key_names:
-                loss_numerics[key] += loss[key].item()
-
-        for key in self.loss.key_names:
-            _avg_numeric_loss = loss_numerics[key] / count_loop
-            self.history['train_loss_' + key].append(_avg_numeric_loss)
-    
-    
-
-    def validate_training(self):
-        loss_numerics = {}
-        for key in self.loss.key_names:
-            loss_numerics[key] = 0.0
-
-        count_loop = 0
-        with torch.no_grad():
-            self.net.eval()
-            for s, l in self.val_dataset:
-                count_loop += 1
-
-                w = self.net(l)
-
-                loss = self.loss(w, s)
-
-                for key in self.loss.key_names:
-                    loss_numerics[key] += loss[key].item()
-
-            for key in self.loss.key_names:
-                _avg_numeric_loss = loss_numerics[key] / count_loop
-                self.history['train_loss_' + key].append(_avg_numeric_loss)
-
-        return loss_numerics['total'] / count_loop
-
-    
-    def run_test(self):
-        result = {
-            "s": [],
-            "w": []
-        }
-        with torch.no_grad():
-            for s, l in self.test_dataset:
-                w = self.net(l)
-                result["s"].append(np.squeeze(s))
-                result["w"].append(np.squeeze(w))
-        result["s"] = np.concatenate(result["s"], axis=0)
-        result["w"] = np.concatenate(result["w"], axis=0)
-        return result
-
 
 class TimeShiftModel(BaseModel):
     def __init__(self, save_dir, dataset, parameters, device=None):

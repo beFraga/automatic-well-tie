@@ -1,9 +1,6 @@
 import torch
 import torch.nn as nn
-import random
-
-from welltie.geophysics import ricker_wavelet
-from utils import plot
+from utils import normalization
 
 class DualTaskAE(nn.Module):
     def __init__(self):
@@ -30,85 +27,20 @@ class DualTaskAE(nn.Module):
         )
 
         self.wavelet_branch = nn.Sequential(
-            # nn.Conv1d(latent_filters, wavelet_filters, kernel_size=5, stride=1, padding=2),
-            # nn.ReLU(inplace=True),
-            # nn.Conv1d(wavelet_filters, wavelet_filters, kernel_size=5, stride=1, padding=2),
-            # nn.ReLU(inplace=True),
-            nn.Conv1d(latent_filters, 1, kernel_size=64, stride=1, padding=10)
+            nn.Conv1d(latent_filters, wavelet_filters, kernel_size=5, stride=1, padding=2),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(wavelet_filters, wavelet_filters, kernel_size=5, stride=1, padding=2),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(wavelet_filters, 1, kernel_size=5, stride=1, padding=2)
         )
 
-        last = self.wavelet_branch[-1]
-        wavelet = ricker_wavelet(random.uniform(5, 125), 0.004, 64)
-        plot(wavelet)
-        wavelet = wavelet.view(1, 1, 64)
-        wavelet = wavelet.repeat(1, last.in_channels, 1)
-        with torch.no_grad():
-            last.weight.copy_(wavelet)
-            # last.bias.zero_()
-        # for param in last.parameters():
-        #     param.requires_grad = False        
 
     def forward(self, s_noyse):
         latent = self.encoder(s_noyse)
         s_syn = self.seismic_decoder(latent)
         w = self.wavelet_branch(latent)
-        w = w / torch.sqrt(torch.sum(w ** 2, dim=-1, keepdim=True) + 1e-8)
-        return s_syn, w
-    
-
-class SeisAE(nn.Module):
-    def __init__(self):
-        super(SeisAE, self).__init__()
-
-        filters = 32
-        latent_filters = 8
-        wavelet_filters = 8
-        kernel_size = 3
-
-        self.encoder = nn.Sequential(
-            nn.Conv1d(1, filters, kernel_size=kernel_size, stride=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(filters, filters, kernel_size=kernel_size, stride=2, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(filters, latent_filters, kernel_size=kernel_size, stride=1, padding=1),
-            nn.ReLU(inplace=True)
-        )
-
-        self.decoder = nn.Sequential(
-            nn.ConvTranspose1d(latent_filters, filters, kernel_size=kernel_size, stride=2, padding=1, output_padding=1),
-            nn.ReLU(inplace=True),
-            nn.ConvTranspose1d(filters, 1, kernel_size=kernel_size, stride=3, padding=1, output_padding=2)
-        )
-
-    def forward(self, s_noyse):
-        latent = self.encoder(s_noyse)
-        s_syn = self.decoder(latent)
-        return s_syn
-    
-    def encode(self, s):
-        return self.encoder(s)
-    
-
-class WaveletDecoder(nn.Module):
-    def __init__(self):
-        super(WaveletDecoder, self).__init__()
-
-        filters = 8
-        wavelet_filters = 8
-
-        self.decoder = nn.Sequential(
-            nn.Conv1d(filters, wavelet_filters, kernel_size=5, stride=1, padding=2),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(wavelet_filters, wavelet_filters, kernel_size=5, stride=1, padding=2),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(wavelet_filters, 1, kernel_size=5, stride=1, padding=3)
-        )
-
-    def forward(self, latent):
-        w = self.decoder(latent)
-        w = w / torch.sqrt(torch.sum(w ** 2, dim=-1, keepdim=True) + 1e-8)
-        return w
-    
+        w = normalization(w)
+        return s_syn, w   
 
 
 

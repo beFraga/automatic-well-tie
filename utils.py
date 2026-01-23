@@ -2,6 +2,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+
+def normalization(x):
+    return x / (torch.max(x, dim=-1, keepdim=True).values + 1e-8)
+
+
 def plotar_amostras_como_curvas(real, syn, solo):
     """
     Plota cada linha dos arrays como uma curva separada.
@@ -17,10 +22,9 @@ def plotar_amostras_como_curvas(real, syn, solo):
     """
     for i in range(real.shape[0]):
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-
         ax1.plot(real[i], color='blue', alpha=0.7)
         ax1.plot(syn[i], color='red', linestyle='--', alpha=0.7)
-        ax1.set_title(f'Plot {i}')
+        ax1.set_title(f'Plot')
         ax1.set_xlabel('Escala Unitária (índice dentro da amostra)')
         ax1.set_ylabel('Amplitude')
         ax1.grid(True)
@@ -81,15 +85,15 @@ def adjust_data_length(data, target_length=300, device='cpu'):
 
 
 def plot(x):
-        fig, ax = plt.subplots(1, 1, figsize=(14, 6))
-        ax.plot(x, color='blue', alpha=0.7)
-        ax.set_title(f'Plot')
-        ax.set_xlabel('Escala Unitária (índice dentro da amostra)')
-        ax.set_ylabel('Amplitude')
-        ax.grid(True)
+    fig, ax = plt.subplots(1, 1, figsize=(14, 6))
+    ax.plot(x, color='blue', alpha=0.7)
+    ax.set_title(f'Plot')
+    ax.set_xlabel('Escala Unitária (índice dentro da amostra)')
+    ax.set_ylabel('Amplitude')
+    ax.grid(True)
 
-        plt.tight_layout()
-        plt.show()
+    plt.tight_layout()
+    plt.show()
 
     
 def plot_2(a, b):
@@ -140,16 +144,15 @@ def plot_2j(real, syn):
         s_syn (np.array): Array (n, y) para comparação com 's'.
         w (np.array): Array (n, z) para o gráfico individual.
     """
-    for i in range(real.shape[0]):
-        plt.plot(real[i], color='blue', alpha=0.7)
-        plt.plot(syn[i], color='red', linestyle='--', alpha=0.7)
-        plt.suptitle(f'Plot {i}')
-        plt.xlabel('Escala Unitária (índice dentro da amostra)')
-        plt.ylabel('Amplitude')
-        plt.grid(True)
-        plt.legend(['Real', 'Gerada'], loc='upper right')
+    plt.plot(real, color='blue', alpha=0.7)
+    plt.plot(syn, color='red', linestyle='--', alpha=0.7)
+    plt.suptitle(f'Plot')
+    plt.xlabel('Escala Unitária (índice dentro da amostra)')
+    plt.ylabel('Amplitude')
+    plt.grid(True)
+    plt.legend(['Real', 'Gerada'], loc='upper right')
 
-        plt.show()
+    plt.show()
 
 
 
@@ -196,3 +199,51 @@ def plot_4(a, b, c, d):
         plt.tight_layout()
 
         plt.show()
+
+
+def plot_axis(x, y):
+    for i in range(x.shape[0]):
+        plt.plot(x, y[i])
+        plt.show()
+
+
+def apply_ormsby_frequency_domain(spectrum, freq_axis, points=[5, 10, 60, 80]):
+    """
+    Aplica um filtro trapezoidal (Ormsby) diretamente em um espectro de amplitude.
+    
+    Parâmetros:
+    - amplitude_spectrum: array 1D com as amplitudes do sinal.
+    - freq_axis: array 1D com as frequências correspondentes a cada amplitude (eixo X).
+    - points: lista [a, b, c, d] definindo os cantos do filtro em Hz.
+    
+    Retorno:
+    - filtered_spectrum: O espectro de amplitude filtrado.
+    - mask: O desenho do filtro (vetor de 0 a 1) para visualização.
+    """
+    a, b, c, d = points
+    
+    # Previne divisão por zero se o usuário colocar rampas verticais (b=a ou d=c)
+    epsilon = 1e-10 
+    
+    # Criação da máscara (filtro) inicializada com zeros
+    mask = np.zeros_like(spectrum)
+        
+    # 1. Rampa de Subida (a < f <= b)
+    # Fórmula da reta: (f - a) / (b - a)
+    idx_up = (freq_axis > a) & (freq_axis <= b)
+    mask[..., idx_up] = (freq_axis[idx_up] - a) / (b - a + epsilon)
+    
+    # 2. Platô / Pass-band (b < f <= c)
+    # Valor é 1.0 constante
+    idx_pass = (freq_axis > b) & (freq_axis <= c)
+    mask[..., idx_pass] = 1.0
+    
+    # 3. Rampa de Descida (c < f <= d)
+    # Fórmula da reta descendo: 1 - (f - c) / (d - c)
+    idx_down = (freq_axis > c) & (freq_axis <= d)
+    mask[..., idx_down] = 1.0 - (freq_axis[idx_down] - c) / (d - c + epsilon)
+        
+    # Aplicação do filtro (Multiplicação ponto a ponto)
+    filtered_spectrum = spectrum * mask
+    
+    return filtered_spectrum, mask
