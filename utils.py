@@ -83,8 +83,10 @@ def plotar_amostras_como_curvas(
     solo: Union[np.ndarray, torch.Tensor],
     dt: float = 0.002,
     max_samples: Optional[int] = None,
+    pause_time: float = 0.5,
     save_path: Optional[str] = None,
     show_metrics: bool = True,
+    interactive: bool = True,
 ):
     """
     Plota amostras sísmicas (real vs sintética) junto com wavelets estimadas.
@@ -122,9 +124,37 @@ def plotar_amostras_como_curvas(
 
     n_samples = real.shape[0]
     n_to_plot = min(n_samples, max_samples or n_samples)
-    indices = range(n_to_plot)
 
-    for i in indices:
+    # Ativar modo interativo
+    if interactive:
+        plt.ion()
+
+    # Criar figura uma única vez
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+
+    # Inicializar linhas vazias
+    (line_real,) = ax1.plot([], [], color="blue", lw=1.2, label="Real")
+    (line_syn,) = ax1.plot([], [], color="red", lw=1.2, ls="--", label="Gerada")
+    (line_erro,) = ax1.plot([], [], color="black", lw=0.8, alpha=0.4, label="Erro")
+    (line_wavelet,) = ax2.plot([], [], color="blue", lw=1.5)
+    vline_wavelet = ax2.axvline(0, color="k", linestyle=":", alpha=0.6)
+
+    # Configurar eixos
+    ax1.set_xlabel("Tempo (s)")
+    ax1.set_ylabel("Amplitude")
+    ax1.grid(True)
+    ax1.legend()
+
+    ax2.set_xlabel("Tempo (s)")
+    ax2.set_ylabel("Amplitude (normalizado)")
+    ax2.set_ylim(-1.05, 1.05)
+    ax2.grid(True)
+    ax2.set_title("Wavelet estimada")
+
+    plt.tight_layout()
+
+    # Loop através das amostras
+    for i in range(n_to_plot):
         # Extrair amostra i
         real_i = real[i]
         syn_i = syn[i]
@@ -135,53 +165,57 @@ def plotar_amostras_como_curvas(
         real_i = real_i[:min_len]
         syn_i = syn_i[:min_len]
 
+        # Vetores de tempo
         t_s = np.arange(len(real_i)) * dt
         t_w = (np.arange(len(solo_i)) - len(solo_i) // 2) * dt
 
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
-
-        # --- SINAL ---
-        ax1.plot(t_s, real_i, color="blue", lw=1.2, label="Real")
-        ax1.plot(t_s, syn_i, color="red", lw=1.2, ls="--", label="Gerada")
-
+        # Calcular erro
         erro = real_i - syn_i
-        ax1.plot(t_s, erro, color="black", lw=0.8, alpha=0.4, label="Erro")
+
+        # --- ATUALIZAR SINAL ---
+        line_real.set_data(t_s, real_i)
+        line_syn.set_data(t_s, syn_i)
+        line_erro.set_data(t_s, erro)
+
+        # Ajustar limites do eixo
+        ax1.set_xlim(t_s.min(), t_s.max())
+        y_min = min(real_i.min(), syn_i.min(), erro.min())
+        y_max = max(real_i.max(), syn_i.max(), erro.max())
+        margin = (y_max - y_min) * 0.1
+        ax1.set_ylim(y_min - margin, y_max + margin)
 
         # Título com métricas
-        titulo = f"Sinal sísmico – Amostra {i}"
+        titulo = f"Sinal sísmico – Amostra {i}/{n_to_plot - 1}"
         if show_metrics:
             metricas = _calcular_metricas(real_i, syn_i)
             titulo += (
                 f" (RMSE: {metricas['rmse']:.4f}, Corr: {metricas['correlacao']:.4f})"
             )
-
         ax1.set_title(titulo)
-        ax1.set_xlabel("Tempo (s)")
-        ax1.set_ylabel("Amplitude")
-        ax1.grid(True)
-        ax1.legend()
 
-        # --- WAVELET ---
+        # --- ATUALIZAR WAVELET ---
         w = solo_i / (np.max(np.abs(solo_i)) + 1e-8)
+        line_wavelet.set_data(t_w, w)
+        ax2.set_xlim(t_w.min(), t_w.max())
 
-        ax2.plot(t_w, w, color="blue", lw=1.5)
-        ax2.axvline(0, color="k", linestyle=":", alpha=0.6)
-
-        ax2.set_title("Wavelet estimada")
-        ax2.set_xlabel("Tempo (s)")
-        ax2.set_ylabel("Amplitude (normalizado)")
-        ax2.set_ylim(-1.05, 1.05)
-        ax2.grid(True)
-
-        plt.tight_layout()
-
+        # Salvar frame se necessário
         if save_path:
             fig.savefig(
                 f"{save_path}_amostra_{i:03d}.png", dpi=100, bbox_inches="tight"
             )
-            plt.close(fig)
+
+        # Atualizar display
+        if interactive:
+            plt.pause(pause_time)
         else:
-            plt.show()
+            fig.canvas.draw()
+            fig.canvas.flush_events()
+            plt.pause(pause_time)
+
+    # Desativar modo interativo e manter figura aberta
+    if interactive:
+        plt.ioff()
+        plt.show()
 
 
 def adjust_data_length(data, target_length=300, device="cpu"):
