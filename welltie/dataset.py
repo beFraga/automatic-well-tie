@@ -1,13 +1,13 @@
-import torch
-import lasio
-import segyio
-import numpy as np
-from torch.utils.data import Dataset, DataLoader, TensorDataset, Subset, random_split
-
 import random
 
-from welltie.geophysics import *
+import lasio
+import numpy as np
+import segyio
+import torch
+from torch.utils.data import DataLoader, Dataset, Subset, TensorDataset, random_split
+
 from utils import adjust_data_length
+from welltie.geophysics import *
 
 
 class BaseDataset(Dataset):
@@ -69,8 +69,12 @@ class SeismicDataset(BaseDataset):
                 t0_ms = 0.0
 
             t0_s = t0_ms * 1e-3
-            self.duration = t0_s + np.arange(int(f.samples.size), dtype=np.float64) * self.dt
-            seis_subset = take_closers_trace_well(locs, xs, ys, args["syfile"], k=int(args["train_size"]/len(locs)))
+            self.duration = (
+                t0_s + np.arange(int(f.samples.size), dtype=np.float64) * self.dt
+            )
+            seis_subset = take_closers_trace_well(
+                locs, xs, ys, args["syfile"], k=int(args["train_size"] / len(locs))
+            )
             self.s = torch.tensor(seis_subset, dtype=torch.float32).unsqueeze(1)
             for s in seis_subset:
                 db_random = np.random.normal(30, 8)
@@ -85,14 +89,11 @@ class SeismicDataset(BaseDataset):
         n_train = int(train_ratio * N)
         n_val = N - n_train
 
-        self.train_set, self.val_set = random_split(
-            full_dataset, [n_train, n_val]
-        )
+        self.train_set, self.val_set = random_split(full_dataset, [n_train, n_val])
 
         test_data = take_well_trace(locs, xs, ys, args["syfile"])
         zeros = torch.zeros(test_data.shape)
         self.test_set = TensorDataset(test_data, zeros)
-
 
         # n_val = int(val_ratio * N)
         # n_test = N - n_train - n_val
@@ -162,8 +163,6 @@ class WaveletExtractorDataset(BaseDataset):
         return self.s[idx], self.l[idx]
 
 
-
-        
 class TimeShiftDataset(BaseDataset):
     def __init__(self, s, s_syn, ts, train_ratio=0.7, val_ratio=0.2, batch_size=32):
         super().__init__()
@@ -388,8 +387,7 @@ class MLPDataset(BaseDataset):
 
 
 def seismic_well_dataset_generator(lasdir, syfile, distortions):
-            return w.to(device)
-    
+    return w.to(device)
 
 
 def take_coordinates_trace(lasdir, syfile):
@@ -404,14 +402,19 @@ def take_coordinates_trace(lasdir, syfile):
         locs.append(loc)
     locs = np.array(locs) * 10
     with segyio.open(syfile, "r", strict=False) as f:
-        xs = np.array([f.header[i][segyio.TraceField.CDP_X] for i in range(f.tracecount)])
-        ys = np.array([f.header[i][segyio.TraceField.CDP_Y] for i in range(f.tracecount)])
+        xs = np.array(
+            [f.header[i][segyio.TraceField.CDP_X] for i in range(f.tracecount)]
+        )
+        ys = np.array(
+            [f.header[i][segyio.TraceField.CDP_Y] for i in range(f.tracecount)]
+        )
         return xs, ys, locs
+
 
 def take_closers_trace_well(locs, xs, ys, syfile, k=1000):
     indices = []
     for loc in locs:
-        distances = np.sqrt((xs - loc[0])**2 + (ys - loc[1])**2)
+        distances = np.sqrt((xs - loc[0]) ** 2 + (ys - loc[1]) ** 2)
         ind = np.argpartition(distances, k)[:k]
         ind = ind[np.argsort(distances[ind])]
         indices.append(ind)
@@ -425,24 +428,11 @@ def take_closers_trace_well(locs, xs, ys, syfile, k=1000):
 def take_well_trace(locs, xs, ys, syfile):
     seismics = []
     with segyio.open(syfile, "r", strict=False) as f:
-        xs = np.array(
-            [f.header[i][segyio.TraceField.CDP_X] for i in range(f.tracecount)]
-        )
-        ys = np.array(
-            [f.header[i][segyio.TraceField.CDP_Y] for i in range(f.tracecount)]
-        )
         for loc in locs:
             distances = np.sqrt((xs - loc[0]) ** 2 + (ys - loc[1]) ** 2)
             closest_trace_idx = np.argmin(distances)
             seismics.append(f.trace[closest_trace_idx])
-    n_seis = []
-    for s in seismics:
-        s = np.array(s, dtype=np.float32)
-        for i in range(distortions):
-            db_random = np.random.normal(30, 8)
-            n_s, shift = add_awgn(s, db_random)
-            n_seis.append(n_s)
-    return SeismicDataset(n_seis)
+    return torch.tensor(np.array(seismics), dtype=torch.float32).unsqueeze(1)
 
 
 def timeshift_dataset_generator(vp, rho, s, w, ts):

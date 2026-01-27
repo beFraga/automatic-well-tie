@@ -1,10 +1,11 @@
-import torch
 import random
-import torch.nn.functional as F
-from welltie.geophysics import ricker_wavelet
 
-from utils import normalization, apply_ormsby_frequency_domain
-from utils_spectrum import get_power_spectra, get_freqs
+import torch
+import torch.nn.functional as F
+
+from utils import apply_ormsby_frequency_domain, normalization
+from utils_spectrum import get_freqs, get_power_spectra
+from welltie.geophysics import ricker_wavelet
 
 
 class BaseLoss(object):
@@ -21,13 +22,13 @@ class BaseLoss(object):
 
 
 class DualTaskLoss(BaseLoss):
-    key_names = ('total', 'reconstruction', 'spectral')
+    key_names = ("total", "reconstruction", "spectral")
 
     def __init__(self, parameters):
         self.key_names = DualTaskLoss.key_names
         super().__init__()
 
-        self.alpha = parameters['alpha']
+        self.alpha = parameters["alpha"]
 
         self.dt = parameters["dt"]
         self.duration = parameters["duration"]
@@ -36,23 +37,21 @@ class DualTaskLoss(BaseLoss):
         self.f_max = 80.0
 
     def __call__(self, s, s_rec, w):
-        loss_reconstruction = F.mse_loss(s, s_rec) # ||s - s'|| ^ 2
+        loss_reconstruction = F.mse_loss(s, s_rec)  # ||s - s'|| ^ 2
 
         loss_spectral = self.spectral_loss(w, s)  # alpha * ||F(w') - F(s)|| ^ 2
-
 
         loss_total = loss_reconstruction + self.alpha * loss_spectral
 
         loss = {
-                'total': loss_total,
-                'reconstruction': loss_reconstruction,
-                'spectral': loss_spectral,
-               }
+            "total": loss_total,
+            "reconstruction": loss_reconstruction,
+            "spectral": loss_spectral,
+        }
         return loss
 
-
     def pre_train(self, s, s_rec, w):
-        loss_reconstruction = F.mse_loss(s, s_rec) # ||s - s'|| ^ 2
+        loss_reconstruction = F.mse_loss(s, s_rec)  # ||s - s'|| ^ 2
 
         ricker = ricker_wavelet(30, self.dt, w.shape[-1]).to(w.device)
         ricker = ricker.reshape(1, 1, -1)
@@ -63,22 +62,21 @@ class DualTaskLoss(BaseLoss):
 
         loss_total = F.mse_loss(w / wmax, ricker_batch / rmax) + loss_reconstruction
         loss = {
-            'total': loss_total,
-            'reconstruction': loss_reconstruction,
-            'spectral': torch.tensor(0.0)
+            "total": loss_total,
+            "reconstruction": loss_reconstruction,
+            "spectral": torch.tensor(0.0),
         }
         return loss
 
     def spectral_loss(self, w, s):
         duration = self.duration[-1] - self.duration[0]
-        #spec_s = get_amplitude_spectra(s, duration, self.dt)
-        #spec_w = get_amplitude_spectra(w, duration, self.dt)
+        # spec_s = get_amplitude_spectra(s, duration, self.dt)
+        # spec_w = get_amplitude_spectra(w, duration, self.dt)
         spec_s = get_power_spectra(s, duration, self.dt)
         spec_w = get_power_spectra(w, duration, self.dt)
 
-
         mean_s = torch.sum(spec_s, dim=0) / spec_s.shape[0]
-        #pool_s = moving_average(mean_s, 64)
+        # pool_s = moving_average(mean_s, 64)
         pool_s = torch.avg_pool1d(mean_s, kernel_size=65, stride=1, padding=32)
         pool_s = torch.avg_pool1d(pool_s, kernel_size=65, stride=1, padding=32)
         pool_s = torch.avg_pool1d(pool_s, kernel_size=65, stride=1, padding=32)
@@ -91,9 +89,9 @@ class DualTaskLoss(BaseLoss):
 
         batch_s = norm_s.reshape(1, 1, -1)
         batch_s = batch_s.expand(norm_w.shape[0], -1, -1)
-        batch_s = batch_s[..., :norm_w.shape[-1]]
+        batch_s = batch_s[..., : norm_w.shape[-1]]
 
-        #plot_2j(norm_s[0].detach().numpy(), norm_w[0, 0].detach().numpy())
+        # plot_2j(norm_s[0].detach().numpy(), norm_w[0, 0].detach().numpy())
 
         loss = F.mse_loss(batch_s, norm_w)
 
@@ -108,7 +106,7 @@ class DualTaskLoss(BaseLoss):
         # norm_w = spec_w / max_w
         # norm_s = spec_s / max_s
 
-        #plot_2j(norm_s[0, 0].detach().numpy(), norm_w[0, 0].detach().numpy())
+        # plot_2j(norm_s[0, 0].detach().numpy(), norm_w[0, 0].detach().numpy())
         # loss = F.mse_loss(norm_s[..., mask], norm_w[..., mask])
 
         return loss

@@ -4,6 +4,36 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+
+def normalization(x):
+    return x / (torch.max(x, dim=-1, keepdim=True).values + 1e-8)
+
+
+def _to_numpy(data: Union[np.ndarray, torch.Tensor]) -> np.ndarray:
+    """Converte torch.Tensor para numpy se necessário."""
+    if isinstance(data, torch.Tensor):
+        return data.detach().cpu().numpy()
+    return np.asarray(data)
+
+
+def _garantir_shape_2d(data: np.ndarray, nome: str = "array") -> np.ndarray:
+    """
+    Garante que o array tem exatamente 2 dimensões (n_amostras, n_features).
+    Cria cópia se necessário para evitar problemas de broadcast.
+    """
+    data = np.atleast_1d(np.asarray(data))
+
+    if data.ndim == 1:
+        data = data.reshape(1, -1).copy()
+    elif data.ndim == 2:
+        data = data.copy()
+    else:
+        n_first = data.shape[0]
+        data = data.reshape(n_first, -1).copy()
+
+    return data
+
+
 def plotar_amostras_como_curvas(real, syn, solo):
     """
     Garante que o array tem exatamente 2 dimensões (n_amostras, n_features).
@@ -313,13 +343,13 @@ def plot_2j(real, syn):
         s_syn (np.array): Array (n, y) para comparação com 's'.
         w (np.array): Array (n, z) para o gráfico individual.
     """
-    plt.plot(real, color='blue', alpha=0.7)
-    plt.plot(syn, color='red', linestyle='--', alpha=0.7)
-    plt.suptitle(f'Plot')
-    plt.xlabel('Escala Unitária (índice dentro da amostra)')
-    plt.ylabel('Amplitude')
+    plt.plot(real, color="blue", alpha=0.7)
+    plt.plot(syn, color="red", linestyle="--", alpha=0.7)
+    plt.suptitle(f"Plot")
+    plt.xlabel("Escala Unitária (índice dentro da amostra)")
+    plt.ylabel("Amplitude")
     plt.grid(True)
-    plt.legend(['Real', 'Gerada'], loc='upper right')
+    plt.legend(["Real", "Gerada"], loc="upper right")
 
     plt.show()
 
@@ -378,40 +408,100 @@ def plot_axis(x, y):
 def apply_ormsby_frequency_domain(spectrum, freq_axis, points=[5, 10, 60, 80]):
     """
     Aplica um filtro trapezoidal (Ormsby) diretamente em um espectro de amplitude.
-    
+
+    Esta versão aceita tanto arrays NumPy quanto torch.Tensors (CPU ou CUDA).
+    Se qualquer entrada for um torch.Tensor, o processamento será feito com torch
+    para evitar conversões implícitas que tentam chamar `.numpy()` em tensores CUDA.
+
     Parâmetros:
-    - amplitude_spectrum: array 1D com as amplitudes do sinal.
-    - freq_axis: array 1D com as frequências correspondentes a cada amplitude (eixo X).
+    - amplitude_spectrum: array 1D ou tensor com as amplitudes do sinal.
+    - freq_axis: array 1D ou tensor com as frequências correspondentes a cada amplitude (eixo X).
     - points: lista [a, b, c, d] definindo os cantos do filtro em Hz.
-    
+
     Retorno:
-    - filtered_spectrum: O espectro de amplitude filtrado.
-    - mask: O desenho do filtro (vetor de 0 a 1) para visualização.
+    - filtered_spectrum: O espectro de amplitude filtrado (mesmo tipo de entrada: torch.Tensor ou np.ndarray).
+    - mask: O desenho do filtro (vetor de 0 a 1) para visualização (mesmo tipo da entrada).
     """
     a, b, c, d = points
-    
+
     # Previne divisão por zero se o usuário colocar rampas verticais (b=a ou d=c)
-    epsilon = 1e-10 
-    
-    # Criação da máscara (filtro) inicializada com zeros
-    mask = np.zeros_like(spectrum)
-        
-    # 1. Rampa de Subida (a < f <= b)
-    # Fórmula da reta: (f - a) / (b - a)
-    idx_up = (freq_axis > a) & (freq_axis <= b)
-    mask[..., idx_up] = (freq_axis[idx_up] - a) / (b - a + epsilon)
-    
-    # 2. Platô / Pass-band (b < f <= c)
-    # Valor é 1.0 constante
-    idx_pass = (freq_axis > b) & (freq_axis <= c)
-    mask[..., idx_pass] = 1.0
-    
-    # 3. Rampa de Descida (c < f <= d)
-    # Fórmula da reta descendo: 1 - (f - c) / (d - c)
-    idx_down = (freq_axis > c) & (freq_axis <= d)
-    mask[..., idx_down] = 1.0 - (freq_axis[idx_down] - c) / (d - c + epsilon)
-        
-    # Aplicação do filtro (Multiplicação ponto a ponto)
-    filtered_spectrum = spectrum * mask
-    
-    return filtered_spectrum, mask
+    epsilon = 1e-10
+
+    # Caso pelo menos uma entrada seja um tensor torch, faça tudo com torch
+    is_torch = isinstance(spectrum, torch.Tensor) or isinstance(freq_axis, torch.Tensor)
+
+    if is_torch:
+        # Determina dispositivo e dtype alvo
+        if isinstance(spectrum, torch.Tensor):
+            device = spectrum.device
+            dtype = spectrum.dtype
+        elif isinstance(freq_axis, torch.Tensor):
+            device = freq_axis.device
+            dtype = freq_axis.dtype
+        else:
+            # fallback (não deve acontecer)
+            device = None
+            dtype = None
+
+        # Converte entradas não-torch para torch no dispositivo/dtype apropriado
+        if not isinstance(spectrum, torch.Tensor):
+            spectrum = torch.tensor(np.asarray(spectrum), device=device, dtype=dtype)
+        else:
+            spectrum = spectrum.to(device=device, dtype=dtype)
+
+        if not isinstance(freq_axis, torch.Tensor):
+            freq_axis = torch.tensor(np.asarray(freq_axis), device=device, dtype=dtype)
+        else:
+            freq_axis = freq_axis.to(device=device, dtype=dtype)
+
+        # Criação da máscara (filtro) inicializada com zeros (mesma shape de spectrum)
+        mask = torch.zeros_like(spectrum)
+
+        # 1. Rampa de Subida (a < f <= b)
+        idx_up = (freq_axis > a) & (freq_axis <= b)
+        if idx_up.any():
+            mask[..., idx_up] = (freq_axis[idx_up] - a) / (b - a + epsilon)
+
+        # 2. Platô / Pass-band (b < f <= c)
+        idx_pass = (freq_axis > b) & (freq_axis <= c)
+        if idx_pass.any():
+            mask[..., idx_pass] = torch.tensor(1.0, device=device, dtype=dtype)
+
+        # 3. Rampa de Descida (c < f <= d)
+        idx_down = (freq_axis > c) & (freq_axis <= d)
+        if idx_down.any():
+            mask[..., idx_down] = 1.0 - (freq_axis[idx_down] - c) / (d - c + epsilon)
+
+        # Aplicação do filtro (Multiplicação ponto a ponto)
+        filtered_spectrum = spectrum * mask
+
+        return filtered_spectrum, mask
+    else:
+        # Versão NumPy (comportamento original)
+        a, b, c, d = points
+
+        # Previne divisão por zero se o usuário colocar rampas verticais (b=a ou d=c)
+        epsilon = 1e-10
+
+        # Criação da máscara (filtro) inicializada com zeros
+        mask = np.zeros_like(spectrum)
+
+        # 1. Rampa de Subida (a < f <= b)
+        # Fórmula da reta: (f - a) / (b - a)
+        idx_up = (freq_axis > a) & (freq_axis <= b)
+        mask[..., idx_up] = (freq_axis[idx_up] - a) / (b - a + epsilon)
+
+        # 2. Platô / Pass-band (b < f <= c)
+        # Valor é 1.0 constante
+        idx_pass = (freq_axis > b) & (freq_axis <= c)
+        mask[..., idx_pass] = 1.0
+
+        # 3. Rampa de Descida (c < f <= d)
+        # Fórmula da reta descendo: 1 - (f - c) / (d - c)
+        idx_down = (freq_axis > c) & (freq_axis <= d)
+        mask[..., idx_down] = 1.0 - (freq_axis[idx_down] - c) / (d - c + epsilon)
+
+        # Aplicação do filtro (Multiplicação ponto a ponto)
+        filtered_spectrum = spectrum * mask
+
+        return filtered_spectrum, mask

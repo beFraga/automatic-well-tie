@@ -1,10 +1,8 @@
 import torch
 import torch.nn as nn
-from utils import normalization
-import random
 
+from utils import normalization
 from welltie.geophysics import ricker_wavelet
-from utils import plot
 
 
 class DualTaskAE(nn.Module):
@@ -48,22 +46,23 @@ class DualTaskAE(nn.Module):
         )
 
         self.wavelet_branch = nn.Sequential(
-            nn.Conv1d(latent_filters, wavelet_filters, kernel_size=5, stride=1, padding=2),
+            nn.Conv1d(
+                latent_filters, wavelet_filters, kernel_size=5, stride=1, padding=2
+            ),
             nn.ReLU(inplace=True),
-            nn.Conv1d(wavelet_filters, wavelet_filters, kernel_size=5, stride=1, padding=2),
+            nn.Conv1d(
+                wavelet_filters, wavelet_filters, kernel_size=5, stride=1, padding=2
+            ),
             nn.ReLU(inplace=True),
-            nn.Conv1d(wavelet_filters, 1, kernel_size=5, stride=1, padding=2)
+            nn.Conv1d(wavelet_filters, 1, kernel_size=5, stride=1, padding=2),
         )
-
 
     def forward(self, s_noyse):
         latent = self.encoder(s_noyse)
         s_syn = self.seismic_decoder(latent)
         w = self.wavelet_branch(latent)
         w = normalization(w)
-        return s_syn, w   
-
-
+        return s_syn, w
 
 
 class TimeShiftPredictor(nn.Module):

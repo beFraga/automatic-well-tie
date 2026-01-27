@@ -5,26 +5,20 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from welltie.network import DualTaskAE, TimeShiftPredictor, MLPWaveletExtractor
-from welltie.losses import DualTaskLoss, TimeShiftLoss, MLPLoss
+from utils import apply_ormsby_frequency_domain, normalization, plot
+from utils_spectrum import get_amplitude_spectra, get_freqs
 from welltie.geophysics import extract_seismic
 from welltie.losses import (
     DualTaskLoss,
     MLPLoss,
-    SeisAELoss,
     TimeShiftLoss,
-    WaveletDecoderLoss,
 )
 from welltie.network import (
     DualTaskAE,
     MLPWaveletExtractor,
-    SeisAE,
     TimeShiftPredictor,
-    WaveletDecoder,
 )
 
-from utils import plot, normalization, apply_ormsby_frequency_domain
-from utils_spectrum import get_amplitude_spectra, get_freqs
 
 class BaseModel:
     def __init__(self, save_dir, dataset, parameters, device=None):
@@ -40,7 +34,7 @@ class BaseModel:
         self.learning_rate = parameters["learning_rate"]
         self.batch_size = parameters["batch_size"]
         self.max_epochs = parameters["max_epochs"]
- 
+
         self.train_dataset, self.val_dataset, self.test_dataset = dataset.get_loaders()
 
         if device is None:
@@ -115,6 +109,7 @@ class DualModel(BaseModel):
         self.pre_train_epochs = self.params["pre_train_epochs"]
 
         s, _ = next(iter(self.train_dataset))
+        s = s.to(self.device)
         latent_shape = self.net.encoder(s).shape[-1]
         torch.manual_seed(0)
         self.unit = torch.randn(8, latent_shape).to(self.device)
@@ -137,7 +132,6 @@ class DualModel(BaseModel):
             self.history["train_loss_" + key] = []
             self.history["val_loss_" + key] = []
 
-
     def train(self):
         _div = len(self.train_dataset) / self.batch_size
         _remain = int(len(self.train_dataset) % self.batch_size > 0)
@@ -159,7 +153,6 @@ class DualModel(BaseModel):
         self.history["elapsed"] = time.time() - self.start_time
         self.save_history()
         self.save_network(self.save_dir / self.state_dict)
-
 
     def train_one_epoch(self):
         self.net.train()
@@ -196,8 +189,6 @@ class DualModel(BaseModel):
             _avg_numeric_loss = loss_numerics[key] / count_loop
             self.history["train_loss_" + key].append(_avg_numeric_loss)
 
-
-
     def pre_train(self):
         self.net.train()
 
@@ -226,7 +217,7 @@ class DualModel(BaseModel):
             loss["total"].backward()
             self.optimizer.step()
             if self.cur_epoch == self.pre_train_epochs - 1 and count_loop == 1:
-                plot(w[0, 0].detach().numpy())
+                plot(w[0, 0].detach().cpu().numpy())
 
             for key in self.loss.key_names:
                 loss_numerics[key] += loss[key].item()
@@ -234,7 +225,6 @@ class DualModel(BaseModel):
         for key in self.loss.key_names:
             _avg_numeric_loss = loss_numerics[key] / count_loop
             self.history["train_loss_" + key].append(_avg_numeric_loss)
-
 
     def validate_training(self):
         loss_numerics = {}
@@ -266,7 +256,9 @@ class DualModel(BaseModel):
         self.net.eval()
 
         with torch.no_grad():
-            duration = self.params["loss"]["duration"][-1] - self.params["loss"]["duration"][0]
+            duration = (
+                self.params["loss"]["duration"][-1] - self.params["loss"]["duration"][0]
+            )
             result["x"] = get_freqs(duration, self.params["loss"]["dt"])
             for s, _ in self.test_dataset:
                 # Move tensores para a GPU
@@ -288,6 +280,7 @@ class DualModel(BaseModel):
         result["w"] = np.concatenate(result["w"], axis=0)
         result["w_spec"] = np.concatenate(result["w_spec"], axis=0)
         return result
+
 
 class TimeShiftModel(BaseModel):
     def __init__(self, save_dir, dataset, parameters, device=None):
