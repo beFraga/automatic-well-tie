@@ -1,18 +1,24 @@
 import torch
+import random
 import torch.nn.functional as F
 from welltie.geophysics import ricker_wavelet
 
 from utils import normalization, apply_ormsby_frequency_domain
 from utils_spectrum import get_power_spectra, get_freqs
 
+
 class BaseLoss(object):
     key_names = None
+
     def __init__(self):
         if self.key_names == None:
-            raise NotImplementedError("Losses subclasses must implement `key_names` attribute")
+            raise NotImplementedError(
+                "Losses subclasses must implement `key_names` attribute"
+            )
 
-        if 'total' not in self.key_names:
+        if "total" not in self.key_names:
             raise NotImplementedError("The key `total` must be present for backdrop")
+
 
 class DualTaskLoss(BaseLoss):
     key_names = ('total', 'reconstruction', 'spectral')
@@ -32,7 +38,7 @@ class DualTaskLoss(BaseLoss):
     def __call__(self, s, s_rec, w):
         loss_reconstruction = F.mse_loss(s, s_rec) # ||s - s'|| ^ 2
 
-        loss_spectral = self.spectral_loss(w, s) # alpha * ||F(w') - F(s)|| ^ 2
+        loss_spectral = self.spectral_loss(w, s)  # alpha * ||F(w') - F(s)|| ^ 2
 
 
         loss_total = loss_reconstruction + self.alpha * loss_spectral
@@ -109,7 +115,7 @@ class DualTaskLoss(BaseLoss):
 
 
 class TimeShiftLoss(BaseLoss):
-    key_names = ('total')
+    key_names = "total"
 
     def __init__(self):
         self.key_names = TimeShiftLoss.key_names
@@ -119,9 +125,8 @@ class TimeShiftLoss(BaseLoss):
         return torch.linalg.norm(ts - ts_syn)
 
 
-
 class MLPLoss(BaseLoss):
-    key_names = ('total', 'logcosh', 'cosine_similarity')
+    key_names = ("total", "logcosh", "cosine_similarity")
 
     def __init__(self):
         self.key_names = MLPLoss.key_names
@@ -130,13 +135,12 @@ class MLPLoss(BaseLoss):
     def __call__(self, y, y_):
         lch = self.logcosh(y, y_)
         cos = torch.nn.CosineSimilarity()
+        # cosine similarity in [ -1, 1 ] -> we want a loss that decreases when
+        # similarity increases, so use (1 - mean_cosine)
         cs = torch.mean(cos(y, y_))
-        total = lch + cs
-        loss = {
-            'total': total,
-            'logcosh': lch,
-            'cosine_similarity': cs
-        }
+        cos_loss = 1.0 - cs
+        total = lch + cos_loss
+        loss = {"total": total, "logcosh": lch, "cosine_similarity": cs}
         return loss
 
     def logcosh(self, y, y_):

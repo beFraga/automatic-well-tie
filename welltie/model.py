@@ -1,13 +1,27 @@
-import torch
-
-import time
 import pickle
+import time
+
 import numpy as np
+import torch
 from tqdm import tqdm
 
 from welltie.network import DualTaskAE, TimeShiftPredictor, MLPWaveletExtractor
 from welltie.losses import DualTaskLoss, TimeShiftLoss, MLPLoss
 from welltie.geophysics import extract_seismic
+from welltie.losses import (
+    DualTaskLoss,
+    MLPLoss,
+    SeisAELoss,
+    TimeShiftLoss,
+    WaveletDecoderLoss,
+)
+from welltie.network import (
+    DualTaskAE,
+    MLPWaveletExtractor,
+    SeisAE,
+    TimeShiftPredictor,
+    WaveletDecoder,
+)
 
 from utils import plot, normalization, apply_ormsby_frequency_domain
 from utils_spectrum import get_amplitude_spectra, get_freqs
@@ -359,24 +373,47 @@ class TimeShiftModel(BaseModel):
                 _avg_numeric_loss = loss_numerics[key] / count_loop
                 self.history["train_loss_" + key].append(_avg_numeric_loss)
 
-        return loss_numerics['total'] / count_loop
-    
-
+        return loss_numerics["total"] / count_loop
 
 
 class MLPWaveletModel(BaseModel):
+    """
+    Modelo que treina uma MLP para extrair wavelets a partir de traços sísmicos.
 
+    Esta classe encapsula a rede `MLPWaveletExtractor`, a função de perda `MLPLoss`,
+    o otimizador e o scheduler de taxa de aprendizado. Fornece métodos para:
+    - treinar por época (`train_one_epoch`),
+    - validar/avaliar durante o treinamento (`validate_training`),
+    - executar inferência em dados de teste (`run_test`).
 
-    def __init__(self, save_dir,
-                       dataset,
-                       parameters,
-                       device = None):
+    Atributos principais (herdados/definidos):
+    - `self.net`: instância de `MLPWaveletExtractor` usada para inferência/treinamento.
+    - `self.loss`: instância de `MLPLoss` que retorna dicionário com vários termos de perda,
+      incluindo a chave `"total"`.
+    - `self.optimizer`: otimizador (Adam) ligado a `self.net.parameters()`.
+    - `self.schedulers`: lista de schedulers (por ex. `StepLR`) aplicada externamente.
+    - `self.history`: dicionário que armazena histórico de perdas por chave (treino/val).
+    - `self.train_dataset`, `self.val_dataset`, `self.test_dataset`: iteráveis fornecidos pelo dataset.
+    """
 
-        super().__init__(save_dir,
-                         dataset,
-                         parameters,
-                         device = device)
-        
+    def __init__(self, save_dir, dataset, parameters, device=None):
+        """
+        Inicializa o modelo MLP para extração de wavelets.
+
+        Parâmetros:
+        - save_dir (str): diretório onde salvar checkpoints e histórico.
+        - dataset: objeto/dicionário com datasets (treino/val/test) já configurados.
+        - parameters (dict): dicionário de hiperparâmetros, deve conter ao menos:
+            - "lr_decay_every_n_epoch": intervalo de epochs para decaimento de LR
+            - "lr_decay_rate": fator de decaimento do LR
+        - device (torch.device ou str, opcional): dispositivo para executar o modelo (CPU/GPU).
+
+        Efeitos colaterais:
+        - Cria a rede, o otimizador, o scheduler e inicializa `self.history` com chaves
+          de perda definidas em `self.loss.key_names`.
+        """
+        super().__init__(save_dir, dataset, parameters, device=device)
+
         self.state_dict = "mlpwavelet_state_dict.pt"
         self.history_file = "mlpwavelet_history.pkl"
         self.net = MLPWaveletExtractor()
@@ -384,20 +421,42 @@ class MLPWaveletModel(BaseModel):
 
         self.loss = MLPLoss()
 
-        self.optimizer = torch.optim.Adam(params=self.net.parameters(), lr=self.learning_rate)
+        self.optimizer = torch.optim.Adam(
+            params=self.net.parameters(), lr=self.learning_rate
+        )
 
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer,
-                                                       parameters['lr_decay_every_n_epoch'],
-                                                       gamma=parameters['lr_decay_rate'])
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(
+            self.optimizer,
+            parameters["lr_decay_every_n_epoch"],
+            gamma=parameters["lr_decay_rate"],
+        )
         self.schedulers = [lr_scheduler]
 
         self.history = {}
         for key in self.loss.key_names:
-            self.history['train_loss_' + key] = []
-            self.history['val_loss_' + key] = []
-
+            self.history["train_loss_" + key] = []
+            self.history["val_loss_" + key] = []
 
     def train_one_epoch(self):
+        """
+        Executa uma passagem de treino (uma época) sobre `self.train_dataset`.
+
+        Fluxo geral:
+        - Coloca a rede em modo treino (`self.net.train()`).
+        - Itera sobre amostras do dataset: para cada (s, w_, _):
+            - move tensores para o dispositivo,
+            - zera gradientes do otimizador,
+            - faz forward passando `s` pela rede para obter `w` estimado,
+            - calcula as várias componentes de perda via `self.loss(w, w_)`,
+            - retropropaga a perda total (`loss["total"].backward()`),
+            - executa `optimizer.step()` para atualizar pesos.
+        - Acumula as perdas numéricas por chave (`self.loss.key_names`) e ao final
+          registra a perda média dessa época em `self.history["train_loss_<key>"]`.
+
+        Observações:
+        - Espera-se que cada item de `self.train_dataset` seja uma tupla com `s, w_, _`.
+        - Não retorna valor; atualiza `self.history`.
+        """
         self.net.train()
 
         loss_numerics = {key: 0.0 for key in self.loss.key_names}
@@ -414,7 +473,7 @@ class MLPWaveletModel(BaseModel):
             w = self.net(s)
 
             loss = self.loss(w, w_)
-            loss['total'].backward()
+            loss["total"].backward()
             self.optimizer.step()
 
             for key in self.loss.key_names:
@@ -422,10 +481,26 @@ class MLPWaveletModel(BaseModel):
 
         for key in self.loss.key_names:
             _avg_numeric_loss = loss_numerics[key] / count_loop
-            self.history['train_loss_' + key].append(_avg_numeric_loss)
-    
+            self.history["train_loss_" + key].append(_avg_numeric_loss)
 
     def validate_training(self):
+        """
+        Avalia o modelo no conjunto de validação (`self.val_dataset`) sem gradientes.
+
+        Fluxo:
+        - Coloca a rede em modo avaliação (`self.net.eval()`).
+        - Itera sobre o conjunto de validação, realiza forward e computa as perdas
+          (mesma função de perda usada no treino).
+        - Acumula as perdas por chave e armazena a média na história (`self.history`).
+
+        Retorno:
+        - Retorna a perda média total (float) sobre o conjunto de validação, i.e.
+          `loss_numerics["total"] / n_amostras`.
+
+        Observações:
+        - Executado sob `torch.no_grad()` para eficiência.
+        - Garante que não haja atualização de pesos durante a validação.
+        """
         loss_numerics = {}
         for key in self.loss.key_names:
             loss_numerics[key] = 0.0
@@ -448,17 +523,33 @@ class MLPWaveletModel(BaseModel):
 
             for key in self.loss.key_names:
                 _avg_numeric_loss = loss_numerics[key] / count_loop
-                self.history['train_loss_' + key].append(_avg_numeric_loss)
+                self.history["val_loss_" + key].append(_avg_numeric_loss)
 
-        return loss_numerics['total'] / count_loop
+        return loss_numerics["total"] / count_loop
 
-    
     def run_test(self):
-        result = {
-            "s": [],
-            "w": [],
-            "s_": []
-        }
+        """
+        Executa inferência no conjunto de teste (`self.test_dataset`) e constrói resultados.
+
+        Para cada amostra (s_, w_, r) do dataset de teste:
+        - move tensores para o dispositivo,
+        - estima a wavelet `w = self.net(s_)`,
+        - converte tensores para numpy e armazena `s_` e `w` nos arrays de saída,
+        - reconstrói o sinal sísmico `s` chamando `extract_seismic(r, w)` e armazena.
+
+        Retorno:
+        - Um dicionário com chaves:
+            - "s": array numpy concatenado com os sinais reconstruídos (shape: N x ...),
+            - "w": array numpy concatenado com as wavelets estimadas,
+            - "s_": array numpy concatenado com os traços de entrada.
+        - As entradas são concatenadas ao longo do eixo 0 para formar arrays completos de teste.
+
+        Observações:
+        - Executado sob `torch.no_grad()` (modo avaliação).
+        - `extract_seismic(r, w)` deve ser responsável por combinar reflectividade `r`
+          com a wavelet estimada `w` para produzir o traço sísmico reconstruído `s`.
+        """
+        result = {"s": [], "w": [], "s_": []}
         with torch.no_grad():
             for s_, w_, r in self.test_dataset:
                 s_ = s_.to(self.device)
