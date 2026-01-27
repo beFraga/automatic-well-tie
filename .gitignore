@@ -6,3 +6,5 @@ __pycache__
 *.ipynb
 .idea
 training
+training/dualmodel_history.pkl
+training/dualmodel_state_dict.pt
