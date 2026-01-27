@@ -400,8 +400,27 @@ def plot_4(a, b, c, d):
 
 
 def plot_axis(x, y):
-    for i in range(x.shape[0]):
-        plt.plot(x, y[i])
+    # Converte entradas para numpy se necessário
+    x = _to_numpy(x)
+    y = _to_numpy(y)
+
+    # Assegura que x seja 1D
+    x = x.reshape(-1)
+
+    # Se y for 1D, plota uma única curva
+    if y.ndim == 1:
+        min_len = min(x.shape[0], y.shape[0])
+        plt.plot(x[:min_len], y[:min_len])
+        plt.show()
+        return
+
+    # Se y for 2D, cada linha é uma curva; itera sobre as linhas de y
+    n_curves = y.shape[0]
+    for i in range(n_curves):
+        yi = y[i]
+        # Ajusta o comprimento para combinar com x se necessário
+        min_len = min(x.shape[0], yi.shape[0])
+        plt.plot(x[:min_len], yi[:min_len])
         plt.show()
 
 
