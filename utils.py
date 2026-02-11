@@ -205,8 +205,12 @@ def plot_4(a, b, c, d):
 
 
 def plot_axis(x, y):
-    for i in range(x.shape[0]):
-        plt.plot(x, y[i])
+    if len(y.shape) > 1:
+        for i in range(y.shape[0]):
+            plt.plot(x, y[i])
+            plt.show()
+    else:
+        plt.plot(x, y)
         plt.show()
 
 
@@ -224,6 +228,7 @@ def apply_ormsby_frequency_domain(spectrum, freq_axis, points=[5, 10, 60, 80]):
     - mask: O desenho do filtro (vetor de 0 a 1) para visualização.
     """
     a, b, c, d = points
+    spectrum = spectrum.detach().numpy()
     
     # Previne divisão por zero se o usuário colocar rampas verticais (b=a ou d=c)
     epsilon = 1e-10 
@@ -249,4 +254,22 @@ def apply_ormsby_frequency_domain(spectrum, freq_axis, points=[5, 10, 60, 80]):
     # Aplicação do filtro (Multiplicação ponto a ponto)
     filtered_spectrum = spectrum * mask
     
-    return filtered_spectrum, mask
+    return torch.tensor(filtered_spectrum, dtype=torch.float32), mask
+
+
+def r_coefficient(x, y):
+    x = np.asarray(x)
+    y = np.asarray(y)
+
+    if x.shape != y.shape:
+        raise ValueError("x and y must have the same shape")
+
+    x_mean = x.mean()
+    y_mean = y.mean()
+
+    numerator = np.sum((x - x_mean) * (y - y_mean))
+    denominator = np.sqrt(
+        np.sum((x - x_mean)**2) * np.sum((y - y_mean)**2)
+    )
+
+    return numerator / denominator

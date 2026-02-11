@@ -97,6 +97,9 @@ class DualModel(BaseModel):
 
         self.params["loss"]["dt"] = dataset.dt
         self.params["loss"]["duration"] = dataset.duration
+        self.duration = dataset.duration[-1] - dataset.duration[0]
+        self.freqs = get_freqs(self.duration, dataset.dt)
+        self.dt = dataset.dt
 
         self.pre_train_epochs = self.params["pre_train_epochs"]
 
@@ -252,15 +255,14 @@ class DualModel(BaseModel):
         self.net.eval()
 
         with torch.no_grad():
-            duration = self.params["loss"]["duration"][-1] - self.params["loss"]["duration"][0]
-            result["x"] = get_freqs(duration, self.params["loss"]["dt"])
+            result["x"] = self.freqs
             for s, _ in self.test_dataset:
                 # Move tensores para a GPU
                 s = normalization(s).to(self.device)
                 s_syn, w = self.net(s)
                 w = w.to(self.device)
-                spec_w = get_amplitude_spectra(w, duration, self.params["loss"]["dt"])
-                filtered_w, _ = apply_ormsby_frequency_domain(spec_w, result["x"])
+                spec_w = get_amplitude_spectra(w, self.duration, self.dt)
+                filtered_w, _ = apply_ormsby_frequency_domain(spec_w, self.freqs)
                 new_w = torch.fft.irfft(filtered_w, n=w.shape[-1])
                 new_w = torch.roll(new_w, shifts=new_w.shape[-1] // 2, dims=-1)
 
@@ -274,6 +276,20 @@ class DualModel(BaseModel):
         result["w"] = np.concatenate(result["w"], axis=0)
         result["w_spec"] = np.concatenate(result["w_spec"], axis=0)
         return result
+    
+    def process(self, s):
+        s = torch.tensor(s, dtype=torch.float32).unsqueeze(0)
+        s = normalization(s).to(self.device)
+        _, w = self.net(s)
+        w = w.to(self.device)
+        spec_w = get_amplitude_spectra(w, self.duration, self.dt)
+        filtered_w, _ = apply_ormsby_frequency_domain(spec_w, self.freqs)
+        new_w = torch.fft.irfft(filtered_w, n=w.shape[-1])
+        new_w = torch.roll(new_w, shifts=new_w.shape[-1] // 2, dims=-1)
+        #plot(new_w[0])
+
+        return new_w
+
 
 class TimeShiftModel(BaseModel):
     def __init__(self, save_dir, dataset, parameters, device=None):

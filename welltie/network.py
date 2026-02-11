@@ -80,9 +80,9 @@ class TimeShiftPredictor(nn.Module):
 
     def forward(self, s, s_syn):
         conv_s = self.truth_network(s)
-        conv_s_synth = self.synthetic_network(s_syn)
+        conv_s_syn = self.synthetic_network(s_syn)
 
-        x = torch.cat([s, s_syn], dim=1)
+        x = torch.cat([conv_s, conv_s_syn], dim=1)
 
         return self.concat_network(x)
     

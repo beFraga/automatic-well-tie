@@ -6,7 +6,7 @@ from torch.utils.data import Dataset, DataLoader, TensorDataset, Subset, random_
 import random
 
 from welltie.geophysics import *
-from utils import adjust_data_length
+from utils import adjust_data_length, plot_2j, plot, normalization, r_coefficient, plot_axis
 
 class BaseDataset(Dataset):
     def __init__(self, x, train_ratio=0.7, val_ratio=0.2, batch_size=32):
@@ -111,14 +111,17 @@ class SeismicDataset(BaseDataset):
 
         
 class TimeShiftDataset(BaseDataset):
-    def __init__(self, s, s_syn, ts, train_ratio=0.7, val_ratio=0.2, batch_size=32):
-        super().__init__()
+    def __init__(self, args, train_ratio=0.7, val_ratio=0.2, batch_size=32, train_distortions=100):
+        self._model = args["_model"]
+        
+        well_data = take_well_data(args["lasdir"])
+        s, s_w, ts = self.set_dataset(args["syfile"], well_data, train_distortions)
         
         self.s      = torch.tensor(s, dtype=torch.float32).unsqueeze(1)
-        self.s_syn  = torch.tensor(s_syn, dtype=torch.float32).unsqueeze(1)
+        self.s_w    = torch.tensor(s_w, dtype=torch.float32).unsqueeze(1)
         self.ts     = torch.tensor(ts, dtype=torch.float32).unsqueeze(1)
 
-        full_dataset = TensorDataset(self.s, self.s_syn, self.ts)
+        full_dataset = TensorDataset(self.s, self.s_w, self.ts)
 
         N = len(full_dataset)
         n_train = int(train_ratio * N)
@@ -133,6 +136,128 @@ class TimeShiftDataset(BaseDataset):
         self.val_loader   = DataLoader(self.val_set, batch_size=batch_size//2, shuffle=False)
         self.test_loader  = DataLoader(self.test_set, batch_size=batch_size//2, shuffle=False)
     
+
+    def set_dataset(self, syfile, well_data, train_distortions):
+        traces = []
+        traces_wraped = []
+        time_shifts = []
+
+        with segyio.open(syfile, "r", strict=False) as f:
+            dt = float(segyio.tools.dt(f)) * 1e-6
+            xs = np.array([f.header[i][segyio.TraceField.CDP_X] for i in range(f.tracecount)])
+            ys = np.array([f.header[i][segyio.TraceField.CDP_Y] for i in range(f.tracecount)])
+
+            for v in well_data:
+                rho0 = v["rho"]
+                sonic = v["sonic"]
+                depth = v["depth"]
+                loc = np.array(v["loc"]) * 10
+                kb = v["kb"]
+                gl = v["gl"]
+                start = v["start"]
+                repl_vel = 1600
+                water_vel = 1480
+
+                distances = np.sqrt((xs - loc[0])**2 + (ys - loc[1])**2)
+                closest_trace_idx = np.argmin(distances)
+                trace = f.trace[closest_trace_idx]
+                w = self._model.process(trace).squeeze(0)
+
+                plot(w)
+
+                sonic = np.nan_to_num(sonic, nan=np.nanmean(sonic))
+                rho0 = np.nan_to_num(rho0, nan=np.nanmean(rho0))
+
+                vp0 = 1e6 / sonic
+                
+                twt = generate_twt(sonic, depth)
+
+
+                logs = {'vp': vp0, 'rho': rho0}
+
+                time_seis, logs_res = resample_logs_to_seismic(twt, logs, dt)
+                vp = logs_res['vp']
+                rho = logs_res['rho']
+
+                dist_water = kb - gl
+                print(dist_water)
+                twt_water = 0 if gl == 0 else 2.0 * dist_water / water_vel
+
+                dist_gap = start - dist_water
+
+                if dist_gap < 0:
+                    print("Warning: Log starts ABOVE the seafloor? Check inputs")
+                    dist_gap = 0
+                
+                twt_gap = 2.0 * dist_gap / repl_vel
+
+                t_start = twt_water + twt_gap
+
+                print(f"--- Geometry Report ---")
+                print(f"Water TWT: {twt_water:.4f} s")
+                print(f"Gap TWT:   {twt_gap:.4f} s")
+                print(f"Log Start: {t_start:.4f} s")
+
+                n_samples_water = int(np.round(twt_water / dt))
+                n_samples_gap = int(np.round(twt_gap / dt))
+
+                # [WATER] - VP: 1480, RHO: 1030
+                vp_water = np.ones(n_samples_water) * water_vel
+                rho_water = np.ones(n_samples_water) * 1030
+
+                # [GAP] - VP: 1600, RHO: 2000
+                vp_gap = np.ones(n_samples_gap) * vp[0]
+                rho_gap = np.ones(n_samples_gap) * rho[0]
+
+                print("Water N: ", n_samples_water)
+                print("Gap N: ", n_samples_gap)
+
+
+                # [WATER] + [GAP] + [LOG]
+                full_vp = np.concatenate([vp_water, vp_gap, vp])
+                full_rho = np.concatenate([rho_water, rho_gap, rho])
+                print("vp: ", vp.shape, full_vp.shape)
+                print("rho: ", rho.shape, full_rho.shape)
+
+                plot_2j(vp0, rho0)
+                plot_2j(vp, rho)
+                plot_2j(full_vp, full_rho)
+
+                s, ts_ = SeismicModel(full_vp, full_rho, w, t0=time_seis[0], dt=dt)
+                
+                s = s.squeeze(-1)
+                #print(depth.shape, twt.shape)
+                #print(twt)
+                #plot_axis(depth, twt)
+
+                #synth += np.random.randn(*synth.shape) * 0.01
+                #s = extract_seismic(synth, w)
+
+                padding = np.zeros(trace.shape[-1] - s.shape[-1])
+                s_pad = np.concatenate([s, padding])
+                print(s.shape, trace.shape, s_pad.shape)
+
+                print(r_coefficient(s_pad, trace))
+                [n_trace, n_s] = normalization(torch.tensor(np.array([trace, s_pad]), dtype=torch.float32))
+                plot_2j(n_trace, n_s)
+                
+                for _ in range(train_distortions):
+                    twt_warped, time_shift = generate_warped_twt(twt)
+                    time_seis, logs_res_w = resample_logs_to_seismic(twt_warped, logs, dt)
+                    vp_w = logs_res_w['vp']
+                    rho_w = logs_res_w['rho']
+                    s_w, _ = SeismicModel(vp_w, rho_w, w, t0=time_seis[0], dt=dt)
+                    #s_w += np.random.randn(*synth_w.shape) * 0.01
+                    #s_w = extract_seismic(synth_w, w)
+
+                    traces.append(s)
+                    traces_wraped.append(s_w)
+                    time_shifts.append(time_shift)
+
+        traces = torch.tensor(np.array(traces), dtype=torch.float32).unsqueeze(1)
+        traces_wraped = torch.tensor(np.array(traces_wraped), dtype=torch.float32).unsqueeze(1)
+        time_shifts = torch.tensor(np.array(time_shifts), dtype=torch.float32).unsqueeze(1)
+        return traces, traces_wraped, time_shifts
 
     def get_loaders(self):
         return self.train_loader, self.val_loader, self.test_loader
@@ -313,6 +438,29 @@ class MLPDataset(BaseDataset):
             return w.to(device)
     
 
+
+def take_well_data(lasdir):
+    values = []
+    for lasfile in lasdir.iterdir():
+        las = lasio.read(lasfile)
+        loc = list(map(float, las.well['LOC'].value.replace(" ", "").split("X=")[1].split("Y=")))
+        rho = las['RHOB']
+        sonic = las["DT"]
+        depth = las["DEPTH"]
+        kb = las.well["EKB"].value
+        gl = las.well["EGL"].value
+        start = las.well["STRT"].value
+        value = {
+            "rho": rho,
+            "sonic": sonic,
+            "depth": depth,
+            "loc": loc,
+            "kb": kb,
+            "gl": gl,
+            "start": start
+        }
+        values.append(value)
+    return values
 
 def take_coordinates_trace(lasdir, syfile):
     locs = []
