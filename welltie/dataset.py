@@ -2,11 +2,15 @@ import torch
 import lasio, segyio
 import numpy as np
 from torch.utils.data import Dataset, DataLoader, TensorDataset, Subset, random_split
+from scipy.signal import savgol_filter
 
 import random
 
 from welltie.geophysics import *
-from utils import adjust_data_length, plot_2j, plot, normalization, r_coefficient, plot_axis
+from welltie.SeReMPy import SeismicModel
+from utils import adjust_data_length, plot_2j, normalization, rolling_window, despike
+
+import matplotlib.pyplot as plt
 
 class BaseDataset(Dataset):
     def __init__(self, x, train_ratio=0.7, val_ratio=0.2, batch_size=32):
@@ -148,37 +152,44 @@ class TimeShiftDataset(BaseDataset):
             ys = np.array([f.header[i][segyio.TraceField.CDP_Y] for i in range(f.tracecount)])
 
             for v in well_data:
-                rho0 = v["rho"]
-                sonic = v["sonic"]
-                depth = v["depth"]
+                RHO = v["rho"]
+                SONIC = v["sonic"]
+                DEPTH = v["depth"]
                 loc = np.array(v["loc"]) * 10
                 kb = v["kb"]
                 gl = v["gl"]
                 start = v["start"]
+                print(f"Well: {v["name"]}")
                 repl_vel = 1600
                 water_vel = 1480
+                window = 13 # The lenght of the filter (13 samples or ~ 2m)
+                window = 50
 
                 distances = np.sqrt((xs - loc[0])**2 + (ys - loc[1])**2)
                 closest_trace_idx = np.argmin(distances)
                 trace = f.trace[closest_trace_idx]
+                #print(f", ".join(map(str, trace)))
                 w = self._model.process(trace).squeeze(0)
+                #print(f", ".join(map(str, np.array(w))))
 
-                plot(w)
 
-                sonic = np.nan_to_num(sonic, nan=np.nanmean(sonic))
-                rho0 = np.nan_to_num(rho0, nan=np.nanmean(rho0))
+                #plot(w)
 
-                vp0 = 1e6 / sonic
+                SONIC = np.nan_to_num(SONIC, nan=np.nanmean(SONIC))
+                RHO = np.nan_to_num(RHO, nan=np.nanmean(RHO))
+
                 
-                twt = generate_twt(sonic, depth)
 
 
+                """
+                twt = generate_twt(sonic0, depth)
                 logs = {'vp': vp0, 'rho': rho0}
-
                 time_seis, logs_res = resample_logs_to_seismic(twt, logs, dt)
-                vp = logs_res['vp']
-                rho = logs_res['rho']
+                vp_t = logs_res['vp']
+                rho_t = logs_res['rho']
+                """
 
+                """
                 dist_water = kb - gl
                 print(dist_water)
                 twt_water = 0 if gl == 0 else 2.0 * dist_water / water_vel
@@ -192,12 +203,81 @@ class TimeShiftDataset(BaseDataset):
                 twt_gap = 2.0 * dist_gap / repl_vel
 
                 t_start = twt_water + twt_gap
+                """
+
+                repl_int = start - kb + gl
+                EGL_time = 2.0 * np.abs(kb) / water_vel
+                twt_water = 2.0 * np.abs(gl + EGL_time) / water_vel
+                repl_time = 2.0 * repl_int / repl_vel
+                t_start = twt_water + repl_time
 
                 print(f"--- Geometry Report ---")
                 print(f"Water TWT: {twt_water:.4f} s")
-                print(f"Gap TWT:   {twt_gap:.4f} s")
+                print(f"Gap TWT:   {EGL_time:.4f} s")
                 print(f"Log Start: {t_start:.4f} s")
+                
+                rho_sm = np.median(rolling_window(RHO, window), -1)
+                rho_sm = np.pad(rho_sm, window//2, mode='edge')
+                rho_ = despike(RHO, rho_sm, z=2)
+                rho = savgol_filter(rho_, window_length=11, polyorder=2)
 
+                sonic_sm = np.median(rolling_window(SONIC, window), -1)
+                sonic_sm = np.pad(sonic_sm, window//2, mode='edge')
+                sonic_ = despike(SONIC, sonic_sm, z=2)
+                sonic = savgol_filter(sonic_, window_length=11, polyorder=2)
+                
+                #rho = despike(rho0, window, z=2)
+                #sonic = despike(sonic0, window, z=2)
+                
+                plot_2j(SONIC, sonic)
+                #plot_2j(sonic0, sonic)
+                plot_2j(RHO, rho)
+                #plot_2j(rho0, rho)
+
+                scaled_sonic = 0.15 * np.nan_to_num(sonic) * 1e-6
+                tcum = 2 * np.cumsum(scaled_sonic)
+                tdr = tcum + t_start
+
+                tdr2 = generate_twt(sonic, DEPTH, start_twt=t_start)
+                vp = 1e6 / sonic
+                z = vp * rho
+
+                maxt = trace.shape[-1] * dt
+                print("dt: ", dt)
+                print("maxt: ", maxt)
+                t = np.arange(0, maxt, dt)
+                z_t = np.interp(x=t, xp=tdr, fp=z)
+                z_t2 = np.interp(x=t, xp=tdr2, fp=z)
+
+                print("tdr: ", tdr.shape, "z: ", z.shape, "t: ", t.shape, "z_t2: ", z_t2.shape)
+                plt.plot(tdr, z, t, z_t, t, z_t2)
+                plt.show()
+                
+                rc_t = extract_reflectivity(z_t)
+                rc_t = np.nan_to_num(rc_t)
+
+                rc_t2 = extract_reflectivity(z_t2)
+                rc_t2 = np.nan_to_num(rc_t2)
+
+                plt.plot(t, rc_t, t, rc_t2)
+                plt.show()
+
+                print("t: ", t)
+                print("tdr: " , tdr)
+                print("my tdr: ", tdr2)
+
+                s = np.convolve(w, rc_t, mode='same')
+
+                vp_t = np.interp(x=t, xp=tdr2, fp=vp)
+                plt.plot(t, vp_t)
+                plt.show()
+                rho_t = np.interp(x=t, xp=tdr2, fp=rho)
+                vs_t = vp_t / 2.0
+                s2, ts = SeismicModel(vp_t, vs_t, rho_t, t, np.array([0.0]), w)
+                s2 = np.concatenate(([0], s2.squeeze(1)))
+                ts = np.concatenate(([0], ts))
+
+                """
                 n_samples_water = int(np.round(twt_water / dt))
                 n_samples_gap = int(np.round(twt_gap / dt))
 
@@ -232,21 +312,41 @@ class TimeShiftDataset(BaseDataset):
 
                 #synth += np.random.randn(*synth.shape) * 0.01
                 #s = extract_seismic(synth, w)
+                """
 
-                padding = np.zeros(trace.shape[-1] - s.shape[-1])
-                s_pad = np.concatenate([s, padding])
-                print(s.shape, trace.shape, s_pad.shape)
+                #padding = np.zeros(trace.shape[-1] - s.shape[-1])
+                #s_pad = np.concatenate([s, padding])
 
-                print(r_coefficient(s_pad, trace))
-                [n_trace, n_s] = normalization(torch.tensor(np.array([trace, s_pad]), dtype=torch.float32))
-                plot_2j(n_trace, n_s)
+                #print(r_coefficient(s, trace))
+                plt.plot(s2)
+                plt.show()
+                [n_trace, n_s, n_s2] = normalization(torch.tensor(np.array([trace, s, s2]), dtype=torch.float32))
+                plt.plot(n_trace, t, 'k')
+                plt.plot(n_s, t, 'r--')
+                plt.plot(n_s2, ts, 'b--')
+                plt.fill_betweenx(t, 0, n_trace, n_trace > 0, color='k')
+                plt.fill_betweenx(t, 0, n_s, n_s > 0, color='r')
+                plt.fill_betweenx(ts, 0, n_s2, n_s2 > 0, color='b')
+                plt.gca().invert_yaxis()
+                plt.gca().set_yticklabels('')
+                plt.grid()
+                plt.show()
+
+                plt.plot(t, n_trace, t, n_s, ts, n_s2)
+                plt.show()
                 
                 for _ in range(train_distortions):
-                    twt_warped, time_shift = generate_warped_twt(twt)
-                    time_seis, logs_res_w = resample_logs_to_seismic(twt_warped, logs, dt)
-                    vp_w = logs_res_w['vp']
-                    rho_w = logs_res_w['rho']
-                    s_w, _ = SeismicModel(vp_w, rho_w, w, t0=time_seis[0], dt=dt)
+                    tdr_w, time_shift = generate_warped_twt(tdr)
+                    z_w_t = np.interp(x=tdr_w, xp=t, fp=z)
+                
+                    rc_w_t = extract_reflectivity(z_w_t)
+                    rc_w_t = np.nan_to_num(rc_w_t)
+
+                    s_w = np.convolve(w, rc_w_t, mode='same')
+                    #time_seis, logs_res_w = resample_logs_to_seismic(twt_warped, logs, dt)
+                    #vp_w = logs_res_w['vp']
+                    #rho_w = logs_res_w['rho']
+                    #s_w, _ = SeismicModel(vp_w, rho_w, w, t0=time_seis[0], dt=dt)
                     #s_w += np.random.randn(*synth_w.shape) * 0.01
                     #s_w = extract_seismic(synth_w, w)
 
@@ -450,6 +550,7 @@ def take_well_data(lasdir):
         kb = las.well["EKB"].value
         gl = las.well["EGL"].value
         start = las.well["STRT"].value
+        name = las.well["WELL"].value
         value = {
             "rho": rho,
             "sonic": sonic,
@@ -457,7 +558,8 @@ def take_well_data(lasdir):
             "loc": loc,
             "kb": kb,
             "gl": gl,
-            "start": start
+            "start": start,
+            "name": name
         }
         values.append(value)
     return values

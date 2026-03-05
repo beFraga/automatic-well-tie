@@ -9,10 +9,8 @@ def extract_impedance(rho, vp):
     return rho * vp
 
 def extract_reflectivity(z):
-    zi = z[:-1]
-    zii = z[1:]
-    r = (zii - zi) / (zii + zi)
-    return np.concatenate(([0], r))
+    r = (z[1:] - z[:-1]) / (z[1:] + z[:-1])
+    return np.concatenate((r, [r[-1]]))
 
 def extract_seismic(r, w):
     """Convolução entre refletividade `r` e wavelet `w`.
@@ -49,173 +47,15 @@ def add_awgn(s, snr_db):
     return noisy_s.astype(np.float32), noise.astype(np.float32)
 
 
-def NormalIncidenceMatrix(nsamples):
-    """
-    NORMAL INCIDENCE MATRIX
-    Computes the linearized reflection coefficient matrix for normal incidence.
-    Replaces AkiRichardsCoefficientsMatrix for zero-offset modeling.
-    
-    Parameters
-    ----------
-    nsamples : int
-        Number of samples in the profile.
-
-    Returns
-    -------
-    A : array_like
-        Coefficients matrix (nsamples-1, 2*(nsamples-1)).
-    """
-    
-    # Número de interfaces
-    n_interfaces = nsamples - 1
-    
-    # Em incidência normal linearizada, os pesos são 0.5 para Vp e 0.5 para Rho
-    # R ~ 0.5 * dlnVp + 0.5 * dlnRho
-    weight = 0.5 * np.eye(n_interfaces)
-    
-    # Empilha as matrizes diagonais horizontalmente: [Peso_Vp, Peso_Rho]
-    A = np.hstack([weight, weight])
-    
-    return A
-
-
-def SeismicModel(Vp, Rho, wavelet, t0=0, dt=0.002):
-    """
-    Versão otimizada que não exige um array de tempo de entrada.
-    Assume que Vp e Rho já estão amostrados no 'dt' correto.
-    """
-    
-    # 1. Parâmetros iniciais
-    nm = Vp.shape[0]     # Número de amostras do modelo (camadas)
-    ns_seis = nm - 1     # Número de amostras da sísmica (interfaces)
-    
-    # 2. Logaritmos e Vetor de Modelo (m)
-    # AVISO: Evitar log(0) ou log(negativo) se houver nans
-    logVp = np.log(Vp)
-    logRho = np.log(Rho)
-    
-    m = np.hstack([logVp, logRho]).reshape(-1, 1)
-
-    # 3. Matrizes Operacionais
-    # Matriz de Incidência Normal (pesos 0.5)
-    A = NormalIncidenceMatrix(nm)
-    
-    # Matriz Diferencial (Derivada discreta) - nv=2
-    D = DifferentialMatrix(nm, 2)
-    
-    # Matriz da Wavelet (Convolução)
-    W = WaveletMatrixZeroOffset(wavelet, nm)
-
-    # 4. Cálculo (Forward Model)
-    # mder = refletividade (dlnVp, dlnRho)
-    mder = np.dot(D, m) 
-    
-    # Cpp = Coeficiente de Reflexão (R)
-    R = np.dot(A, mder)
-    
-    # Sismica Sintética
-    Seis = np.dot(W, R)
-
-    # 5. Criação do Vetor de Tempo de Saída
-    # O tempo da primeira reflexão ocorre em t0 + dt/2
-    # Ex: Se t0=0 e dt=4ms, a primeira interface (entre amostra 0 e 1) está em 2ms.
-    TimeSeis = np.arange(0, ns_seis) * dt + t0 + (dt / 2)
-    
-    return Seis, TimeSeis
-
-def WaveletMatrixZeroOffset(wavelet, nsamples):
-    """
-    WAVELET MATRIX ZERO OFFSET
-    Computes the wavelet matrix for discrete convolution (single trace).
-    """
-    # Dimensão reduzida pois não há empilhamento de ângulos
-    W = np.zeros((nsamples - 1, nsamples - 1))
-    indmaxwav = np.argmax(wavelet)
-    
-    wsub = convmtx(wavelet, (nsamples - 1))
-    wsub = wsub.T
-    
-    # Preenche a matriz (equivalente a convolução 1D)
-    W[:, :] = wsub[indmaxwav:indmaxwav + (nsamples - 1), :]
-    
-    return W
-
-def convmtx(w, ns):
-    """    
-    CONVMTX
-    Computes the Toeplitz matrix for discrete convolution.
-    Written by Dario Grana (August 2020)
-
-    Parameters
-    ----------
-    w : array_like
-        Wavelet.
-    ns : int
-        Numbr of samples.
-
-    Returns
-    -------
-    C : array_like
-        Toeplitz matrix.
-
-    References: Grana, Mukerji, Doyen, 2021, Seismic Reservoir Modeling: Wiley - Chapter 5.1
-    """
-
-    if len(w) < ns:
-        a = np.r_[w[0], np.zeros(ns-1)]
-        b = np.r_[w, np.zeros(ns-1)]
-    else:
-        b = np.r_[w[0], np.zeros(ns - 1)]
-        a = np.r_[w, np.zeros(ns - 1)]
-    C = toeplitz(a, b)
-
-    return C
-
-
-def DifferentialMatrix(nt, nv):
-    """
-    DIFFERENTIAL MATRIX
-    Computes the differential matrix for discrete differentiation.
-    Written by Dario Grana (August 2020)
-
-    Parameters
-    ----------
-    nt : int
-        Number of samples.
-    nv : int
-        Number of model variables.
-
-    Returns
-    -------
-    D : array_like 
-        Differential matrix.
-
-    References: Grana, Mukerji, Doyen, 2021, Seismic Reservoir Modeling: Wiley - Chapter 5.1
-    """
-
-    I = np.eye(nt)
-    B = np.zeros((nt, nt))
-    B[1:, 0:- 1] = -np.eye(nt-1)
-    I = (I + B)
-    J = I[1:,:]
-    D = np.zeros(((nt-1)*nv, nt*nv))
-    for i in range(nv):
-        D[ i*(nt-1):(i+1)*(nt-1),i*nt:(i+1)*nt] = J
-        
-    return D
-
 def generate_twt(sonic, depth, start_twt=0.0):
     sonic = np.asarray(sonic)
     depth = np.asarray(depth)
 
-    print("sonic: ", sonic)
-    print("depth: ", depth)
-
     dx = np.diff(depth)
-    sonic_mean = 0.5 * (sonic[:-1] + sonic[1:])
-    dt = sonic_mean * dx # sonic[:-1]
-    t = np.concatenate(([0], np.cumsum(dt))) * 1e-6
-    t = 2 * t + start_twt
+    #sonic_mean = 0.5 * (sonic[:-1] + sonic[1:])
+    dt = sonic[:-1] * dx # sonic[:-1]
+    t = np.concatenate(([0], np.cumsum(dt))) * 2e-6
+    t = t + start_twt
 
     return t
 
@@ -242,7 +82,6 @@ def resample_logs_to_seismic(twt, log, dt, method='backus'):
 
     t_min = np.ceil(twt.min() / dt) * dt
     t_max = np.floor(twt.max() / dt) * dt
-    print("min: ", t_min, "max: ", t_max, "dt: ", dt)
     axis = np.arange(t_min, t_max + dt, dt)
 
     def process_arr(arr, method_name):
@@ -336,4 +175,4 @@ def sinc_wavelet(f, dt, nt):
     return w / torch.max(torch.abs(w))
 
 
-__all__ = ['extract_impedance', 'extract_reflectivity', 'extract_seismic', 'add_awgn', 'SeismicModel', 'generate_twt', 'generate_warped_twt', 'depth2time_interpolation', 'resample_logs_to_seismic', 'ricker_wavelet', 'gabor_wavelet', 'ormsby_wavelet', 'klauder_wavelet', 'sinc_wavelet']
+__all__ = ['extract_impedance', 'extract_reflectivity', 'extract_seismic', 'add_awgn', 'generate_twt', 'generate_warped_twt', 'depth2time_interpolation', 'resample_logs_to_seismic', 'ricker_wavelet', 'gabor_wavelet', 'ormsby_wavelet', 'klauder_wavelet', 'sinc_wavelet']

@@ -273,3 +273,79 @@ def r_coefficient(x, y):
     )
 
     return numerator / denominator
+
+def rolling_window(a, window):
+    if window % 2 == 0:
+        window += 1
+    shape = a.shape[:-1] + (a.shape[-1] - window + 1, window)
+    strides = a.strides + (a.strides[-1],)
+    rolled = np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides)
+    return rolled
+
+def despike(curve, curve_sm, z=2):
+    spikes = np.where(curve - curve_sm > z)[0]
+    spukes = np.where(curve_sm - curve > z)[0]
+    out = np.copy(curve)
+    out[spikes] = curve_sm[spikes] + z  # Clip at the max allowed diff
+    out[spukes] = curve_sm[spukes] - z  # Clip at the min allowed diff
+    return out
+
+
+# def rolling_window(curve_data, window_length, func1d, step=1, return_rolled=False):
+#     """
+#     Private function. Smoother for other smoothing/conditioning functions.
+
+#     Args:
+#         window_length (int): the window length.
+#         func1d (function): a function that takes a 1D array and returns a
+#             scalar.
+#         step (int): if you want to skip samples in the shifted versions.
+#             Don't use this for smoothing, you will get strange results.
+
+#     Returns:
+#         ndarray: the resulting array.
+#     """
+#     # Force odd.
+#     if window_length % 2 == 0:
+#         window_length += 1
+
+#     shape = curve_data.shape[:-1] + (curve_data.shape[-1], window_length)
+#     strides = curve_data.strides + (step * curve_data.strides[-1],)
+#     data = np.nan_to_num(curve_data)
+
+#     data = np.pad(data, int(step * window_length // 2), mode='edge')
+#     rolled = np.lib.stride_tricks.as_strided(data,
+#                                                 shape=shape,
+#                                                 strides=strides)
+#     result = np.apply_along_axis(func1d, -1, rolled)
+#     result[np.isnan(curve_data)] = np.nan
+
+#     if return_rolled:
+#         return result, rolled
+#     else:
+#         return result
+
+# def despike(curve_value, window_length=33, z=2):
+#     """
+#     Despiking filter.
+
+#     Args:
+#         window_length (int): window length in samples. Default 33
+#             (or 5 m for most curves sampled at 0.1524 m intervals).
+#         samples (bool): window length is in samples. Use False for a window
+#             length given in metres.
+#         z (float): Z score
+
+#     Returns:
+#         Curve.
+#     """
+
+#     z *= np.nanstd(curve_value)  # Transform to curve's units
+#     curve_sm = rolling_window(curve_value, window_length, np.median)
+#     spikes = np.where(np.nan_to_num(curve_value - curve_sm) > z)[0]
+#     spukes = np.where(np.nan_to_num(curve_sm - curve_value) > z)[0]
+#     out = np.copy(curve_value)
+#     out[spikes] = curve_sm[spikes] + z
+#     out[spukes] = curve_sm[spukes] - z
+
+#     return out
