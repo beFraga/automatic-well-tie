@@ -1,5 +1,6 @@
 import numpy as np
-import scipy.interpolate
+from scipy.interpolate import CubicSpline
+from scipy.ndimage import gaussian_filter1d
 import torch
 import math
 from scipy.interpolate import interp1d
@@ -59,18 +60,163 @@ def generate_twt(sonic, depth, start_twt=0.0):
 
     return t
 
-def generate_warped_twt(tdr, max_shift_ms=0.05, smoothness=5):
+def generate_warped_twt(tdr, max_shift=20, smoothness=50, n_knots=12):
+    """
     n_samples = len(tdr)
 
+    # Step 1: generate smooth noise (same idea as your original)
     noise = np.random.normal(0, 1, n_samples)
     kernel = np.ones(smoothness) / smoothness
     smooth_noise = np.convolve(noise, kernel, mode='same')
 
-    time_shift = (smooth_noise / np.max(np.abs(smooth_noise))) * max_shift_ms
+    # Step 2: normalize noise
+    smooth_noise = smooth_noise / np.max(np.abs(smooth_noise))
 
-    tdr_warped = tdr + time_shift
+    # Step 3: convert noise into positive increments
+    # base increment = average spacing of original tdr
+    base_increment = np.mean(np.diff(tdr))
+
+    # create small variations around 1.0
+    increments = base_increment * (1 + smooth_noise * (max_shift_ms / base_increment))
+
+    # ensure strictly positive increments (monotonic guarantee)
+    epsilon = 1e-6
+    increments[increments <= 0] = epsilon
+
+    # Step 4: build warped time via cumulative sum
+    tdr_warped = np.cumsum(increments)
+
+    # Step 5: rescale to match original range
+    tdr_warped = (tdr_warped - tdr_warped[0])
+    tdr_warped = tdr_warped / tdr_warped[-1]  # normalize to [0,1]
+    tdr_warped = tdr_warped * (tdr[-1] - tdr[0]) + tdr[0]
+
+    # Step 6: compute effective shift (for compatibility with your original output)
+    time_shift = tdr_warped - tdr
 
     return tdr_warped, time_shift
+    """
+
+    """
+    n = len(tdr)
+    dt = np.diff(tdr)
+    dt = np.append(dt, dt[-1])  # match size
+
+    # Step 1: generate Gaussian noise
+    noise = np.random.normal(0, 1, n)
+
+    # Step 2: smooth it
+    noise = gaussian_filter1d(noise, sigma=smoothness)
+
+    # Step 3: normalize
+    noise /= np.max(np.abs(noise))
+
+    # Step 4: convert to derivative perturbation
+    # ensures: dTw/dt = 1 + alpha * noise > 0
+    alpha = 0.8  # < 1 guarantees positivity
+    derivative = 1 + alpha * noise
+
+    # Step 5: build warped time via integration
+    tdr_warped = np.zeros_like(tdr)
+    tdr_warped[0] = tdr[0]
+
+    for i in range(1, n):
+        tdr_warped[i] = tdr_warped[i-1] + derivative[i] * dt[i]
+
+    # Step 6: rescale shift amplitude to desired max_shift
+    shift = tdr_warped - tdr
+    shift = shift / np.max(np.abs(shift)) * max_shift
+    tdr_warped = tdr + shift
+
+    return tdr_warped, shift
+    """
+
+
+    """
+    n = len(tdr)
+
+    # --- 1. choose knot positions (coarse control)
+    knot_idx = np.linspace(0, n-1, n_knots).astype(int)
+    knot_t = tdr[knot_idx]
+
+    # --- 2. generate smooth shift values at knots
+    knot_shift = np.random.uniform(-max_shift, max_shift, size=n_knots)
+
+    # enforce realistic trend (optional but recommended)
+    knot_shift = np.sort(knot_shift)  # creates drift-like behavior
+
+    # --- 3. interpolate smoothly
+    cs = CubicSpline(knot_t, knot_shift, bc_type='natural')
+    shift = cs(tdr)
+
+    # --- 4. enforce monotonic Tw
+    tdr_warped = tdr + shift
+    tdr_warped = np.maximum.accumulate(tdr_warped)
+
+    shift = tdr_warped - tdr
+
+    return tdr_warped, shift
+    """
+
+    """
+    n = len(tdr)
+
+    # --- 1. knots
+    knot_idx = np.linspace(0, n-1, n_knots).astype(int)
+    knot_t = tdr[knot_idx]
+
+    # --- 2. random shifts (NO sorting)
+    knot_shift = np.random.uniform(-max_shift, max_shift, size=n_knots)
+
+    # --- 3. smooth interpolation
+    cs = CubicSpline(knot_t, knot_shift, bc_type='natural')
+    shift = cs(tdr)
+
+    # --- 4. remove global bias (center around zero)
+    shift -= np.mean(shift)
+
+    # --- 5. limit amplitude
+    shift = shift / np.max(np.abs(shift)) * max_shift
+
+    # --- 6. enforce monotonic Tw
+    tdr_warped = tdr + shift
+    tdr_warped = np.maximum.accumulate(tdr_warped)
+
+    shift = tdr_warped - tdr
+
+    return tdr_warped, shift
+    """
+
+    n = len(tdr)
+    knot_idx = np.linspace(0, n-1, n_knots).astype(int)
+    knot_t = tdr[knot_idx]
+
+    # 1. Generate a bulk static shift (simulate datum/KB errors)
+    bulk_shift = np.random.uniform(-max_shift/2, max_shift/2)
+
+    # 2. Generate random variations
+    knot_shift = np.random.uniform(-max_shift/2, max_shift/2, size=n_knots)
+    
+    # 50% chance to sort the shifts to create a realistic velocity drift trend
+    if np.random.rand() > 0.5:
+        knot_shift = np.sort(knot_shift) 
+        if np.random.rand() > 0.5:
+            knot_shift = knot_shift[::-1] # Sometimes drift the other way
+
+    # 3. Add the bulk shift to the variations
+    knot_shift += bulk_shift
+
+    # 4. Smooth interpolation
+    cs = CubicSpline(knot_t, knot_shift, bc_type='natural')
+    shift = cs(tdr)
+
+    # 5. Enforce monotonic Tw (prevent time going backwards)
+    tdr_warped = tdr + shift
+    tdr_warped = np.maximum.accumulate(tdr_warped)
+
+    shift = tdr_warped - tdr
+
+    return tdr_warped, shift
 
 def resample_logs_to_seismic(twt, log, dt, method='backus'):
     """
@@ -132,6 +278,11 @@ def ricker_wavelet(f, dt, nt):
     w = (1 - 2 * pi2 * t**2) * torch.exp(-pi2 * t**2)
     return w / torch.max(torch.abs(w))
 
+def ricker(f, length, dt):
+    t0 = np.arange(-length/2, (length-dt)/2, dt)
+    y = (1.0 - 2.0*(np.pi**2)*(f**2)*(t0**2)) * np.exp(-(np.pi**2)*(f**2)*(t0**2))
+    return t0, y
+
 def gabor_wavelet(f, dt, nt):
     """Gabor wavelet (Gaussian modulated cosine)"""
     t = torch.linspace(-nt//2, nt//2, nt) * dt
@@ -175,4 +326,4 @@ def sinc_wavelet(f, dt, nt):
     return w / torch.max(torch.abs(w))
 
 
-__all__ = ['extract_impedance', 'extract_reflectivity', 'extract_seismic', 'add_awgn', 'generate_twt', 'generate_warped_twt', 'depth2time_interpolation', 'resample_logs_to_seismic', 'ricker_wavelet', 'gabor_wavelet', 'ormsby_wavelet', 'klauder_wavelet', 'sinc_wavelet']
+__all__ = ['extract_impedance', 'extract_reflectivity', 'extract_seismic', 'add_awgn', 'generate_twt', 'generate_warped_twt', 'depth2time_interpolation', 'resample_logs_to_seismic', 'ricker_wavelet', 'gabor_wavelet', 'ormsby_wavelet', 'klauder_wavelet', 'sinc_wavelet', 'ricker']

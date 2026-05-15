@@ -2,8 +2,8 @@ import torch
 import torch.nn.functional as F
 from welltie.geophysics import ricker_wavelet
 
-from utils import normalization, apply_ormsby_frequency_domain
-from utils_spectrum import get_power_spectra, get_freqs
+from utils import normalization, apply_ormsby_frequency_domain, plot_2j, plot
+from utils_spectrum import get_power_spectra, get_freqs, get_amplitude_spectra, gaussian_smoothing_1d
 
 class BaseLoss(object):
     key_names = None
@@ -25,14 +25,14 @@ class DualTaskLoss(BaseLoss):
 
         self.dt = parameters["dt"]
         self.duration = parameters["duration"]
+        self.freqs = parameters["freqs"]
 
-        self.f_min = 5.0
-        self.f_max = 80.0
+        # self.i = 0
 
-    def __call__(self, s, s_rec, w):
+    def __call__(self, s, s_rec, spec_w):
         loss_reconstruction = F.mse_loss(s, s_rec) # ||s - s'|| ^ 2
 
-        loss_spectral = self.spectral_loss(w, s) # alpha * ||F(w') - F(s)|| ^ 2
+        loss_spectral = self.spectral_loss(spec_w, s) # alpha * ||F(w') - F(s)|| ^ 2
 
 
         loss_total = loss_reconstruction + self.alpha * loss_spectral
@@ -45,17 +45,23 @@ class DualTaskLoss(BaseLoss):
         return loss
 
 
-    def pre_train(self, s, s_rec, w):
+    def pre_train(self, s, s_rec, spec_w):
+        # s = normalization(s)
+        # s_rec = normalization(s_rec)
         loss_reconstruction = F.mse_loss(s, s_rec) # ||s - s'|| ^ 2
 
-        ricker = ricker_wavelet(30, self.dt, w.shape[-1]).to(w.device)
-        ricker = ricker.reshape(1, 1, -1)
-        ricker_batch = ricker.expand(w.shape[0], -1, -1)
+        ricker = ricker_wavelet(30, self.dt, spec_w.shape[-1]).to(spec_w.device)
+        # ricker = ricker.reshape(1, 1, -1)
 
-        wmax = torch.max(torch.abs(w), dim=-1, keepdim=True)[0] + 1e-8
-        rmax = torch.max(torch.abs(ricker_batch), dim=-1, keepdim=True)[0] + 1e-8
+        spec_r = get_amplitude_spectra(ricker, self.duration, self.dt)
+        spec_r, _ = apply_ormsby_frequency_domain(spec_r, self.freqs)
+        spec_r = spec_r.expand(spec_w.shape[0], -1)
 
-        loss_total = F.mse_loss(w / wmax, ricker_batch / rmax) + loss_reconstruction
+        # spec_r = normalization(spec_r)
+
+        # plot_2j(spec_w[0].detach().numpy(), spec_r[0].detach().numpy())
+
+        loss_total = F.mse_loss(spec_w, spec_r) + loss_reconstruction
         loss = {
             'total': loss_total,
             'reconstruction': loss_reconstruction,
@@ -63,61 +69,54 @@ class DualTaskLoss(BaseLoss):
         }
         return loss
 
-    def spectral_loss(self, w, s):
-        duration = self.duration[-1] - self.duration[0]
+    def spectral_loss(self, spec_w, s):
         #spec_s = get_amplitude_spectra(s, duration, self.dt)
         #spec_w = get_amplitude_spectra(w, duration, self.dt)
-        spec_s = get_power_spectra(s, duration, self.dt)
-        spec_w = get_power_spectra(w, duration, self.dt)
+        spec_s = get_amplitude_spectra(s, self.duration, self.dt)
+        # spec_w = get_power_spectra(w, duration, self.dt)
 
 
         mean_s = torch.sum(spec_s, dim=0) / spec_s.shape[0]
         #pool_s = moving_average(mean_s, 64)
-        pool_s = torch.avg_pool1d(mean_s, kernel_size=65, stride=1, padding=32)
-        pool_s = torch.avg_pool1d(pool_s, kernel_size=65, stride=1, padding=32)
-        pool_s = torch.avg_pool1d(pool_s, kernel_size=65, stride=1, padding=32)
+        pool_s = gaussian_smoothing_1d(mean_s, kernel_size=65, sigma=10)
 
-        freqs = get_freqs(duration, self.dt)
-        filtered_s, _ = apply_ormsby_frequency_domain(pool_s, freqs)
 
-        norm_s = normalization(filtered_s)
-        norm_w = normalization(spec_w)
+        filtered_s, _ = apply_ormsby_frequency_domain(pool_s, self.freqs)
 
-        batch_s = norm_s.reshape(1, 1, -1)
-        batch_s = batch_s.expand(norm_w.shape[0], -1, -1)
-        batch_s = batch_s[..., :norm_w.shape[-1]]
+        # batch_s = filtered_s.reshape(1, 1, -1)
+        batch_s = filtered_s.expand(spec_w.shape[0], -1)
+        batch_s = batch_s[..., :spec_w.shape[-1]]
 
-        #plot_2j(norm_s[0].detach().numpy(), norm_w[0, 0].detach().numpy())
-
-        loss = F.mse_loss(batch_s, norm_w)
-
-        # mask = (freqs >= self.f_min) & (freqs <= self.f_max)
-
-        # if mask.sum() == 0:
-        #     mask[:] = True
-
-        # max_w = torch.max(spec_w[..., mask], dim=-1, keepdim=True)[0] + 1e-8
-        # max_s = torch.max(spec_s[..., mask], dim=-1, keepdim=True)[0] + 1e-8
-
-        # norm_w = spec_w / max_w
-        # norm_s = spec_s / max_s
-
-        #plot_2j(norm_s[0, 0].detach().numpy(), norm_w[0, 0].detach().numpy())
-        # loss = F.mse_loss(norm_s[..., mask], norm_w[..., mask])
+        # if (self.i % 2000 == 0):
+        #     plot_2j(batch_s[0].detach().numpy(), norm_w[0].detach().numpy())
+        # self.i += 1
+        # batch_s = normalization(batch_s)
+        loss = F.mse_loss(batch_s, spec_w)
 
         return loss
 
 
 class TimeShiftLoss(BaseLoss):
-    key_names = ('total')
+    key_names = ('total', 'smooth', 'mse')
 
     def __init__(self):
         self.key_names = TimeShiftLoss.key_names
         super().__init__()
 
-    def __call__(self, ts, ts_syn):
-        return torch.linalg.norm(ts - ts_syn)
+    def __call__(self, ts, ts_syn, mask):
+        loss_mse = F.mse_loss(ts[mask],ts_syn[mask])
+        diff = ts_syn[:,:,1:] - ts_syn[:,:,:-1]
+        loss_smooth = torch.mean(torch.abs(diff))
 
+        loss_total = loss_mse + (0.5 * loss_smooth)
+
+        loss = {
+            'total': loss_total,
+            'smooth': loss_smooth,
+            'mse': loss_mse
+
+        }
+        return loss
 
 
 class MLPLoss(BaseLoss):

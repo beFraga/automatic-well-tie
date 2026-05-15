@@ -22,12 +22,12 @@ if /I "!FILE:~-3!" == ".py" (
 )
 
 if "!CMD!"=="run" (
-    py -m tests.!FILE! run
+    py -m models.!FILE! run
     exit /b 0
 )
 
 if "!CMD!"=="train" (
-    py -m tests.!FILE! train
+    py -m models.!FILE! train
     exit /b 0
 )
 

@@ -1,9 +1,9 @@
 datasets
 venv
 .venv
-codigos_exemplo
 __pycache__
-*.ipynb
+notebooks
 .idea
 training
 1406_Make_a_synthetic
+test*
