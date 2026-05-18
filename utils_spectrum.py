@@ -162,3 +162,27 @@ def moving_average(
         return averaged_data.squeeze(0).squeeze(0)
     else: # original_dim == 2
         return averaged_data.squeeze(0)
+
+
+
+def gaussian_kernel1d(kernel_size: int, sigma: float, device=None):
+    x = torch.arange(kernel_size, device=device) - kernel_size // 2
+    kernel = torch.exp(-0.5 * (x / sigma) ** 2)
+    kernel = kernel / kernel.sum()
+    return kernel
+
+
+def gaussian_smoothing_1d(x, kernel_size=65, sigma=10):
+    """
+    x: (batch, freq) OR (batch, 1, freq)
+    """
+    if x.dim() == 2:
+        x = x.unsqueeze(1)  # (B,1,F)
+
+    kernel = gaussian_kernel1d(kernel_size, sigma, device=x.device)
+    kernel = kernel.view(1, 1, -1)
+
+    padding = kernel_size // 2
+    x_smooth = F.conv1d(x, kernel, padding=padding)
+
+    return x_smooth.squeeze(1)

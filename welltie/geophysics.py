@@ -1,16 +1,19 @@
 import numpy as np
+from scipy.interpolate import CubicSpline
+from scipy.ndimage import gaussian_filter1d
 import torch
 import math
 
+from scipy.interpolate import interp1d
+from scipy.linalg import toeplitz
 
 def extract_impedance(rho, vp):
     return rho * vp
 
 
 def extract_reflectivity(z):
-    zi = z[:-1]
-    zii = z[1:]
-    return (zii - zi) / (zii + zi)
+    r = (z[1:] - z[:-1]) / (z[1:] + z[:-1])
+    return np.concatenate((r, [r[-1]]))
 
 
 def extract_seismic(r, w):
@@ -31,7 +34,7 @@ def extract_seismic(r, w):
     r = np.asarray(r).ravel()
     w = np.asarray(w).ravel()
 
-    return np.convolve(r, w)
+    return np.convolve(r, w, mode="same")
 
 
 def distort_tdr(tdr, sigma=5, scale=10):
@@ -62,6 +65,102 @@ def add_awgn(s, snr_db):
     return noisy_s.astype(np.float32), noise.astype(np.float32)
 
 
+def generate_twt(sonic, depth, start_twt=0.0):
+    sonic = np.asarray(sonic)
+    depth = np.asarray(depth)
+
+    dx = np.diff(depth)
+    #sonic_mean = 0.5 * (sonic[:-1] + sonic[1:])
+    dt = sonic[:-1] * dx # sonic[:-1]
+    t = np.concatenate(([0], np.cumsum(dt))) * 2e-6
+    t = t + start_twt
+
+    return t
+
+def generate_warped_twt(tdr, max_shift=20, smoothness=50, n_knots=12):
+    n = len(tdr)
+    knot_idx = np.linspace(0, n-1, n_knots).astype(int)
+    knot_t = tdr[knot_idx]
+
+    # 1. Generate a bulk static shift (simulate datum/KB errors)
+    bulk_shift = np.random.uniform(-max_shift/2, max_shift/2)
+
+    # 2. Generate random variations
+    knot_shift = np.random.uniform(-max_shift/2, max_shift/2, size=n_knots)
+    
+    # 50% chance to sort the shifts to create a realistic velocity drift trend
+    if np.random.rand() > 0.5:
+        knot_shift = np.sort(knot_shift) 
+        if np.random.rand() > 0.5:
+            knot_shift = knot_shift[::-1] # Sometimes drift the other way
+
+    # 3. Add the bulk shift to the variations
+    knot_shift += bulk_shift
+
+    # 4. Smooth interpolation
+    cs = CubicSpline(knot_t, knot_shift, bc_type='natural')
+    shift = cs(tdr)
+
+    # 5. Enforce monotonic Tw (prevent time going backwards)
+    tdr_warped = tdr + shift
+    tdr_warped = np.maximum.accumulate(tdr_warped)
+
+    shift = tdr_warped - tdr
+
+    return tdr_warped, shift
+
+def resample_logs_to_seismic(twt, log, dt, method='backus'):
+    """
+    method : str
+        'linear': Interpolação linear simples (rápido, mas pode causar aliasing).
+        'block': Média aritmética em blocos (melhor para densidade).
+        'backus': (Simplificado) Média harmônica para Vp (fisicamente correto para ondas).
+    """
+
+    t_min = np.ceil(twt.min() / dt) * dt
+    t_max = np.floor(twt.max() / dt) * dt
+    axis = np.arange(t_min, t_max + dt, dt)
+
+    def process_arr(arr, method_name):
+        if method_name == 'linear':
+            f = interp1d(twt, arr, kind='linear', fill_value="extrapolate")
+            return f(axis)
+        elif method_name in ['block', 'backus']:
+            out_arr = np.zeros_like(axis)
+            for i, t in enumerate(axis):
+                mask = (twt >= t - dt/2) & (twt < t + dt/2)
+
+                if np.sum(mask) > 0:
+                    vals = arr[mask]
+                    if method_name == 'backus':
+                        out_arr[i] = 1 / np.mean(1 / vals)
+                    else:
+                        out_arr[i] = np.mean(vals)
+                else:
+                    if i > 0: out_arr[i] = out_arr[i - 1]
+                    else: out_arr[i] = arr[0]
+        return out_arr
+
+    if isinstance(log, dict):
+        resampled_logs = {}
+        for key, val in log.items():
+            current_method = method
+            if method == 'backus' and key.lower() != 'vp':
+                current_method = 'block'
+            
+            resampled_logs[key] = process_arr(val, current_method)
+        return axis, resampled_logs
+    return axis, process_arr(log, method)
+
+def depth2time_interpolation(x, tdr, dt=0.002):
+    t_min = np.floor(tdr.min() / dt) * dt
+    t_max = np.ceil(tdr.max() / dt) * dt
+    axis = np.arange(t_min, t_max, dt)
+
+    log = np.interp(axis, tdr, x)
+    
+    return log, axis
+
 def generate_distort_tdr(tdr, n):
     tdrs = torch.tensor(())
     shifts = torch.tensor(())
@@ -80,6 +179,11 @@ def ricker_wavelet(f, dt, nt):
     w = (1 - 2 * pi2 * t**2) * torch.exp(-pi2 * t**2)
 
     return w / torch.max(torch.abs(w))
+
+def ricker(f, length, dt):
+    t0 = np.arange(-length/2, (length-dt)/2, dt)
+    y = (1.0 - 2.0*(np.pi**2)*(f**2)*(t0**2)) * np.exp(-(np.pi**2)*(f**2)*(t0**2))
+    return t0, y
 
 
 def gabor_wavelet(f, dt, nt):
@@ -178,4 +282,5 @@ def sinc_wavelet(f, dt, nt):
     )
     return w / torch.max(torch.abs(w))
 
-__all__ = ['extract_impedance', 'extract_reflectivity', 'extract_seismic', 'distort_tdr', 'add_awgn', 'generate_distort_tdr', 'ricker_wavelet', 'gabor_wavelet', 'ormsby_wavelet', 'klauder_wavelet', 'sinc_wavelet']
+
+__all__ = ['extract_impedance', 'extract_reflectivity', 'extract_seismic', 'add_awgn', 'generate_twt', 'generate_warped_twt', 'depth2time_interpolation', 'resample_logs_to_seismic', 'ricker_wavelet', 'gabor_wavelet', 'ormsby_wavelet', 'klauder_wavelet', 'sinc_wavelet', 'ricker']
