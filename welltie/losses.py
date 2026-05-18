@@ -2,8 +2,8 @@ import torch
 import torch.nn.functional as F
 from welltie.geophysics import ricker_wavelet
 
-from utils import normalization, apply_ormsby_frequency_domain, plot_2j, plot
-from utils_spectrum import get_power_spectra, get_freqs, get_amplitude_spectra, gaussian_smoothing_1d
+from utils import apply_ormsby_frequency_domain
+from utils_spectrum import get_amplitude_spectra, gaussian_smoothing_1d
 
 class BaseLoss(object):
     key_names = None
