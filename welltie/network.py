@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from utils import normalization
 
 class DualTaskAE(nn.Module):
     def __init__(self, output_length):
