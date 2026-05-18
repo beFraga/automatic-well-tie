@@ -7,7 +7,7 @@ from scipy.signal import savgol_filter
 import random
 
 from welltie.geophysics import *
-from utils import adjust_data_length, plot_2j, normalization, rolling_window, despike
+from utils import adjust_data_length, rolling_window, despike
 
 import matplotlib.pyplot as plt
 
