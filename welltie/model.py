@@ -5,26 +5,26 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from utils import apply_ormsby_frequency_domain, normalization, plot
-from utils_spectrum import get_amplitude_spectra, get_freqs
-from welltie.geophysics import extract_seismic
-from welltie.losses import (
-    DualTaskLoss,
-    MLPLoss,
-    TimeShiftLoss,
-)
-from welltie.network import (
-    DualTaskAE,
-    MLPWaveletExtractor,
-    TimeShiftPredictor,
-)
+from scipy.interpolate import interp1d
 
+from welltie.network import DualTaskAE, TimeShiftPredictor, MLPWaveletExtractor
+from welltie.losses import DualTaskLoss, TimeShiftLoss, MLPLoss
+from welltie.geophysics import extract_seismic, extract_reflectivity, ricker
+
+from utils import plot, normalization, apply_ormsby_frequency_domain
+from utils_spectrum import get_amplitude_spectra, get_freqs, gaussian_smoothing_1d
+
+import matplotlib.pyplot as plt
 
 class BaseModel:
-    def __init__(self, save_dir, dataset, parameters, device=None):
-        self.state_dict = "trained_net_state_dict.pt"
+    def __init__(self, save_dir, dataset, parameters, device=None, state_dict="trained_net_state_dict.pt", save_ckpt=False):
+        self.state_dict = state_dict
         self.history_file = "history.pkl"
         self.save_dir = save_dir
+        if not self.save_dir.is_dir():
+            self.save_dir.mkdir(parents=True, exist_ok=True)
+        assert self.save_dir.is_dir()
+        self._save_ckpt = save_ckpt
 
         self.start_time = time.time()
 
@@ -41,6 +41,8 @@ class BaseModel:
             self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         else:
             self.device = device
+
+        self.early_stopping = None
 
         self.schedulers = []
 
@@ -61,9 +63,10 @@ class BaseModel:
         _remain = int(len(self.train_dataset) % self.batch_size > 0)
         num_it_per_epoch = _div + _remain
 
+        is_early_stop = False
         for e in tqdm(range(self.start_epoch, self.max_epochs)):
             self.train_one_epoch()
-            # current_val_loss = self.validate_training()
+            current_val_loss = self.validate_training()
 
             if self.schedulers:
                 for sche in self.schedulers:
@@ -71,15 +74,26 @@ class BaseModel:
 
             self.cur_epoch += 1
 
+            if self.early_stopping is not None:
+                is_early_stop = self.early_stopping.step(current_val_loss)
+                if is_early_stop:
+                    break
+            
+
+            if self._save_ckpt:
+                if (e % (self.max_epochs // 4) == 0) or (e == self.max_epochs - 1):
+                    ckpt_path = self.save_dir / ("ckpt_epoch%s.tar" % str(e + 1).zfill(3))
+                    self.save_model_ckpt(ckpt_path, e)
+
         self.history["elapsed"] = time.time() - self.start_time
         self.save_history()
-        self.save_network(self.save_dir / self.state_dict)
+        self.save_network()
 
-    def save_network(self, path):
-        torch.save(self.net.state_dict(), path)
+    def save_network(self):
+        torch.save(self.net.state_dict(), self.save_dir / self.state_dict)
 
-    def load_network(self, path):
-        self.net.load_state_dict(torch.load(path, map_location=self.device))
+    def load_network(self):
+        self.net.load_state_dict(torch.load(self.save_dir / self.state_dict, map_location=self.device))
 
     def save_history(self):
         with open(self.save_dir / self.history_file, "wb") as fp:
@@ -92,27 +106,50 @@ class BaseModel:
 
         if "elapsed" in self.history:
             elapsed = self.history["elapsed"]
+            print(elapsed)
+        
+    def save_model_ckpt(self, path, epoch):
+        torch.save({
+            'epoch': epoch,
+            'net_state_dict': self.net.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'loss': self.loss
+        }, path)
+
+    def restore_model_ckpt(self, ckpt_file):
+        ckpt = torch.load(ckpt_file)
+        self.net.load_state_dict(ckpt['net_state_dict'])
+        self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        self.start_epoch = ckpt['epoch']
+        self.cur_epoch = ckpt['epoch']
+        self.loss = ckpt['loss']
 
 
 class DualModel(BaseModel):
-    def __init__(self, save_dir, dataset, parameters, device=None):
-        super().__init__(save_dir, dataset, parameters, device=device)
+    def __init__(self, save_dir, dataset, parameters, device=None, state_dict="dualmodel_state_dict.pt"):
+        super().__init__(save_dir, dataset, parameters, device=device, state_dict=state_dict)
 
-        self.state_dict = "dualmodel_state_dict.pt"
         self.history_file = "dualmodel_history.pkl"
-        self.net = DualTaskAE()
+
+        self.duration = dataset.duration[-1] - dataset.duration[0]
+        self.full_dur = dataset.duration
+        self.dt = dataset.dt
+        self.freqs = get_freqs(self.duration, self.dt)
+        self.params["loss"]["dt"] = self.dt
+        self.params["loss"]["duration"] = self.duration
+        self.params["loss"]["freqs"] = self.freqs
+
+
+        N = int(self.duration / self.dt)
+        if N % 2 != 0:
+            N += 1
+        N /= 2
+        N += 1
+
+        self.net = DualTaskAE(int(N))
         self.net.to(self.device)
 
-        self.params["loss"]["dt"] = dataset.dt
-        self.params["loss"]["duration"] = dataset.duration
-
         self.pre_train_epochs = self.params["pre_train_epochs"]
-
-        s, _ = next(iter(self.train_dataset))
-        s = s.to(self.device)
-        latent_shape = self.net.encoder(s).shape[-1]
-        torch.manual_seed(0)
-        self.unit = torch.randn(8, latent_shape).to(self.device)
 
         self.loss = DualTaskLoss(self.params["loss"])
 
@@ -170,15 +207,12 @@ class DualModel(BaseModel):
             s_noise = s_noise.to(self.device)
             s = s.to(self.device)
 
-            s_noise = normalization(s_noise)
-            s = normalization(s)
-
-            s_syn, w = self.net(s_noise)
+            s_syn, spec_w = self.net(s_noise)
 
             s_syn = s_syn.to(self.device)
-            w = w.to(self.device)
+            spec_w = spec_w.to(self.device)
 
-            loss = self.loss(s, s_syn, w)
+            loss = self.loss(s, s_syn, spec_w)
             loss["total"].backward()
             self.optimizer.step()
 
@@ -208,16 +242,16 @@ class DualModel(BaseModel):
             s_noise = normalization(s_noise)
             s = normalization(s)
 
-            s_syn, w = self.net(s_noise)
+            s_syn, spec_w = self.net(s_noise)
 
             s_syn = s_syn.to(self.device)
-            w = w.to(self.device)
+            spec_w = spec_w.to(self.device)
 
-            loss = self.loss.pre_train(s, s_syn, w)
+            loss = self.loss.pre_train(s, s_syn, spec_w)
             loss["total"].backward()
             self.optimizer.step()
             if self.cur_epoch == self.pre_train_epochs - 1 and count_loop == 1:
-                plot(w[0, 0].detach().cpu().numpy())
+                plot(spec_w[0].detach().numpy())
 
             for key in self.loss.key_names:
                 loss_numerics[key] += loss[key].item()
@@ -251,47 +285,72 @@ class DualModel(BaseModel):
         return loss_numerics["total"] / count_loop
 
     def run_test(self):
-        result = {"s": [], "s_syn": [], "w": [], "w_spec": [], "x": None}
+        result = {"s": [], "s_syn": [], "w": [], "w_spec": [], "x_f": np.array(self.freqs), "s_spec": [], "x": np.array(self.full_dur), "dt": np.array(self.dt)}
+        # print(self.freqs)
 
         self.net.eval()
 
         with torch.no_grad():
-            duration = (
-                self.params["loss"]["duration"][-1] - self.params["loss"]["duration"][0]
-            )
-            result["x"] = get_freqs(duration, self.params["loss"]["dt"])
             for s, _ in self.test_dataset:
                 # Move tensores para a GPU
-                s = normalization(s).to(self.device)
-                s_syn, w = self.net(s)
-                w = w.to(self.device)
-                spec_w = get_amplitude_spectra(w, duration, self.params["loss"]["dt"])
-                filtered_w, _ = apply_ormsby_frequency_domain(spec_w, result["x"])
-                new_w = torch.fft.irfft(filtered_w, n=w.shape[-1])
+                s = s.to(self.device)
+                s_syn, spec_w = self.net(s)
+
+                # s = normalization(s)
+                # s_syn = normalization(s_syn)
+
+                spec_w = spec_w.to(self.device)
+                # spec_w = get_amplitude_spectra(w, self.duration, self.dt)
+                spec_s = get_amplitude_spectra(s, self.duration, self.dt)
+                # filtered_w, _ = apply_ormsby_frequency_domain(spec_w, self.freqs)
+                # print(pad_w)
+
+
+                pool_s = gaussian_smoothing_1d(spec_s, kernel_size=65, sigma=10)
+                
+
+                filtered_s, _ = apply_ormsby_frequency_domain(pool_s, self.freqs)
+                filtered_w, _ = apply_ormsby_frequency_domain(spec_w, self.freqs)
+
+                new_w = torch.fft.irfft(spec_w, n=128)
                 new_w = torch.roll(new_w, shifts=new_w.shape[-1] // 2, dims=-1)
 
                 result["s_syn"].append(np.squeeze(s_syn.detach().cpu().numpy()))
                 result["w"].append(np.squeeze(new_w.detach().cpu().numpy()))
                 result["w_spec"].append(np.squeeze(filtered_w.detach().cpu().numpy()))
+                result["s_spec"].append(np.squeeze(filtered_s.detach().cpu().numpy()))
                 result["s"].append(np.squeeze(s.detach().cpu().numpy()))
 
         result["s"] = np.concatenate(result["s"], axis=0)
         result["s_syn"] = np.concatenate(result["s_syn"], axis=0)
         result["w"] = np.concatenate(result["w"], axis=0)
         result["w_spec"] = np.concatenate(result["w_spec"], axis=0)
+        result["s_spec"] = np.concatenate(result["s_spec"], axis=0)
         return result
+    
+    def process(self, s):
+        s = torch.tensor(s, dtype=torch.float32).unsqueeze(0)
+        s = normalization(s).to(self.device)
+        _, w = self.net(s)
+        w = w.to(self.device)
+        spec_w = get_amplitude_spectra(w, self.duration, self.dt)
+        filtered_w, _ = apply_ormsby_frequency_domain(spec_w, self.freqs)
+        new_w = torch.fft.irfft(filtered_w, n=w.shape[-1])
+        new_w = torch.roll(new_w, shifts=new_w.shape[-1] // 2, dims=-1)
+
+        return new_w
+
 
 
 class TimeShiftModel(BaseModel):
-    def __init__(self, save_dir, dataset, parameters, device=None):
-        super().__init__(save_dir, dataset, parameters, device=device)
+    def __init__(self, save_dir, dataset, parameters, device=None, state_dict="timeshift_state_dict.pt", save_ckpt=False):
+        super().__init__(save_dir, dataset, parameters, device=device, state_dict=state_dict, save_ckpt=save_ckpt)
 
-        self.state_dict = "timeshift_state_dict.pt"
         self.history_file = "timeshift_history.pkl"
         self.net = TimeShiftPredictor()
         self.net.to(self.device)
 
-        self.loss = TimeShiftLoss
+        self.loss = TimeShiftLoss()
 
         self.optimizer = torch.optim.Adam(
             params=self.net.parameters(), lr=self.learning_rate
@@ -308,6 +367,8 @@ class TimeShiftModel(BaseModel):
         for key in self.loss.key_names:
             self.history["train_loss_" + key] = []
             self.history["val_loss_" + key] = []
+        
+        self.t = dataset.t
 
     def train_one_epoch(self):
         self.net.train()
@@ -317,7 +378,7 @@ class TimeShiftModel(BaseModel):
             loss_numerics[key] = 0.0
 
         count_loop = 0
-        for s, s_syn, ts in self.train_dataset:
+        for s, s_syn, ts, mask in self.train_dataset:
             count_loop += 1
             self.optimizer.zero_grad()
 
@@ -328,7 +389,7 @@ class TimeShiftModel(BaseModel):
 
             ts_syn = self.net(s, s_syn)
 
-            loss = self.loss(ts, ts_syn)
+            loss = self.loss(ts, ts_syn, mask)
             loss["total"].backward()
             self.optimizer.step()
 
@@ -347,7 +408,7 @@ class TimeShiftModel(BaseModel):
         count_loop = 0
         with torch.no_grad():
             self.net.eval()
-            for s, s_syn, ts in self.val_dataset:
+            for s, s_syn, ts, mask in self.val_dataset:
                 count_loop += 1
 
                 # Move tensores para a GPU
@@ -357,7 +418,7 @@ class TimeShiftModel(BaseModel):
 
                 ts_syn = self.net(s, s_syn)
 
-                loss = self.loss(ts, ts_syn)
+                loss = self.loss(ts, ts_syn, mask)
 
                 for key in self.loss.key_names:
                     loss_numerics[key] += loss[key].item()
@@ -366,7 +427,65 @@ class TimeShiftModel(BaseModel):
                 _avg_numeric_loss = loss_numerics[key] / count_loop
                 self.history["train_loss_" + key].append(_avg_numeric_loss)
 
-        return loss_numerics["total"] / count_loop
+        return loss_numerics['total'] / count_loop
+    
+    def run_test(self):
+        # Adicionar ts caso rode na versão sintetica
+        result = {'s': [], 's_syn': [], 'ts_syn': [], 'mask': [], 'sb': [], 't': self.t, 'ts': []}
+
+        self.net.eval()
+
+        with torch.no_grad():
+            # Colocar ts antes de mask caso rode na versão sintetica
+            for s, s_syn, ts, mask, t2, z_t, w in self.test_dataset:
+                # Move tensores para a GPU
+                s = s.to(self.device)
+                s_syn = s_syn.to(self.device)
+                ts_syn = self.net(s, s_syn)
+                # ts_syn = torch.avg_pool1d(ts_syn, 3, 1, 1).detach().cpu().numpy().squeeze(0).squeeze(0)
+                ts_syn = ts_syn.detach().cpu().numpy().squeeze(0).squeeze(0)
+                t2 = t2.detach().cpu().numpy().squeeze(0).squeeze(0)
+                z_t = z_t.detach().cpu().numpy().squeeze(0).squeeze(0)
+                w = w.detach().cpu().numpy().squeeze(0).squeeze(0)
+                mask = mask.squeeze(0).squeeze(0)
+                ts = ts.squeeze(0).squeeze(0)
+                shift = np.interp(t2, self.t, ts_syn) # Faço o shift ser em T2
+                zb = np.interp(t2 + shift, self.t, z_t) # A impedância no tempo vai para a versão deslocada
+                # zb_t = np.interp(self.t, t2, zb)
+
+                zb_t = interp1d(t2, zb, fill_value="extrapolate")(self.t) # Aqui ocorre o deslocamento, pois considero que a versão deslocada está certa
+
+                rcb_t = extract_reflectivity(zb_t) # Valores muito pequenos
+                """
+                print(zb)
+                print(self.t.shape, t2.shape)
+                print(zb_t)
+                print(rcb_t)
+                rcb_t = np.nan_to_num(rcb_t)
+                plt.plot(t2, zb)
+                plt.plot(self.t[mask], z_t[mask])
+                plt.plot(t2 + shift, zb, '--')
+                plt.plot(self.t[mask], zb_t[mask], '--')
+                plt.plot(self.t, rcb_t, '--')
+                plt.legend(['zb por t2', 'z_t', 'zb', 'zb_t'])
+                plt.show()
+                # """
+                sb = np.convolve(w, rcb_t, mode="same")
+
+                result["s"].append(np.squeeze(s.detach().cpu().numpy()))
+                result["s_syn"].append(np.squeeze(s_syn.detach().cpu().numpy()))
+                result["ts"].append(np.squeeze(ts.detach().cpu().numpy()))
+                result["ts_syn"].append(np.squeeze(ts_syn))
+                result["mask"].append(np.squeeze(mask.detach().cpu().numpy()))
+                result["sb"].append(np.squeeze(sb))
+
+        result["s"] = np.array(result["s"])
+        result["s_syn"] = np.array(result["s_syn"])
+        result["ts"] = np.array(result["ts"])
+        result["ts_syn"] = np.array(result["ts_syn"])
+        result["mask"] = np.array(result["mask"])
+        result["sb"] = np.array(result["sb"])
+        return result
 
 
 class MLPWaveletModel(BaseModel):

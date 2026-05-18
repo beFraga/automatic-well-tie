@@ -34,24 +34,6 @@ def _garantir_shape_2d(data: np.ndarray, nome: str = "array") -> np.ndarray:
     return data
 
 
-def plotar_amostras_como_curvas(real, syn, solo):
-    """
-    Garante que o array tem exatamente 2 dimensões (n_amostras, n_features).
-    Cria cópia se necessário para evitar problemas de broadcast.
-    """
-    data = np.atleast_1d(np.asarray(data))
-
-    if data.ndim == 1:
-        data = data.reshape(1, -1).copy()
-    elif data.ndim == 2:
-        data = data.copy()
-    else:
-        n_first = data.shape[0]
-        data = data.reshape(n_first, -1).copy()
-
-    return data
-
-
 def _alinhar_tamanhos_amostras(
     real: np.ndarray, syn: np.ndarray, solo: np.ndarray
 ) -> tuple:
@@ -284,146 +266,6 @@ def adjust_data_length(data, target_length=300, device="cpu"):
 
     return data_out
 
-
-def plot(x):
-    fig, ax = plt.subplots(1, 1, figsize=(14, 6))
-    ax.plot(x, color="blue", alpha=0.7)
-    ax.set_title("Plot")
-    ax.set_xlabel("Escala Unitária (índice dentro da amostra)")
-    ax.set_ylabel("Amplitude")
-    ax.grid(True)
-
-    plt.tight_layout()
-    plt.show()
-
-
-def plot_2(a, b):
-    """
-    Plota cada linha dos arrays como uma curva separada.
-
-    - s (n,x) e s_syn (n,y) são plotados juntos para comparação.
-    - w (n,z) é plotado em um gráfico ao lado.
-    - O eixo X de cada curva terá uma "escala unitária" (0, 1, 2, ...).
-
-    Args:
-        s (np.array): Array (n, x) onde cada uma das 'n' linhas é uma amostra.
-        s_syn (np.array): Array (n, y) para comparação com 's'.
-        w (np.array): Array (n, z) para o gráfico individual.
-    """
-    for i in range(a.shape[0]):
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-
-        ax1.plot(a[i])
-        ax1.set_title(f"Plot {i}")
-        ax1.set_xlabel("Escala Unitária (índice dentro da amostra)")
-        ax1.set_ylabel("Amplitude")
-        ax1.grid(True)
-
-        ax2.plot(b[i])
-        ax2.set_title("")
-        ax2.set_xlabel("Escala Unitária (índice dentro da amostra)")
-        ax2.set_ylabel("Amplitude")
-        ax2.grid(True)
-
-        plt.tight_layout()
-
-        plt.show()
-
-
-def plot_2j(real, syn):
-    """
-    Plota cada linha dos arrays como uma curva separada.
-
-    - s (n,x) e s_syn (n,y) são plotados juntos para comparação.
-    - w (n,z) é plotado em um gráfico ao lado.
-    - O eixo X de cada curva terá uma "escala unitária" (0, 1, 2, ...).
-
-    Args:
-        s (np.array): Array (n, x) onde cada uma das 'n' linhas é uma amostra.
-        s_syn (np.array): Array (n, y) para comparação com 's'.
-        w (np.array): Array (n, z) para o gráfico individual.
-    """
-    plt.plot(real, color="blue", alpha=0.7)
-    plt.plot(syn, color="red", linestyle="--", alpha=0.7)
-    plt.suptitle(f"Plot")
-    plt.xlabel("Escala Unitária (índice dentro da amostra)")
-    plt.ylabel("Amplitude")
-    plt.grid(True)
-    plt.legend(["Real", "Gerada"], loc="upper right")
-
-    plt.show()
-
-
-def plot_4(a, b, c, d):
-    """
-    Plota cada linha dos arrays como uma curva separada.
-
-    - s (n,x) e s_syn (n,y) são plotados juntos para comparação.
-    - w (n,z) é plotado em um gráfico ao lado.
-    - O eixo X de cada curva terá uma "escala unitária" (0, 1, 2, ...).
-
-    Args:
-        s (np.array): Array (n, x) onde cada uma das 'n' linhas é uma amostra.
-        s_syn (np.array): Array (n, y) para comparação com 's'.
-        w (np.array): Array (n, z) para o gráfico individual.
-    """
-    for i in range(a.shape[0]):
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 6))
-
-        ax1.plot(a[i])
-        ax1.set_title(f"Plot {i}")
-        ax1.set_xlabel("Escala Unitária (índice dentro da amostra)")
-        ax1.set_ylabel("Amplitude")
-        ax1.grid(True)
-
-        ax2.plot(b[i])
-        ax2.set_title("")
-        ax2.set_xlabel("Escala Unitária (índice dentro da amostra)")
-        ax2.set_ylabel("Amplitude")
-        ax2.grid(True)
-
-        ax3.plot(c[i])
-        ax3.set_title("")
-        ax3.set_xlabel("Escala Unitária (índice dentro da amostra)")
-        ax3.set_ylabel("Amplitude")
-        ax3.grid(True)
-
-        ax4.plot(d[i])
-        ax4.set_title("")
-        ax4.set_xlabel("Escala Unitária (índice dentro da amostra)")
-        ax4.set_ylabel("Amplitude")
-        ax4.grid(True)
-
-        plt.tight_layout()
-
-        plt.show()
-
-
-def plot_axis(x, y):
-    # Converte entradas para numpy se necessário
-    x = _to_numpy(x)
-    y = _to_numpy(y)
-
-    # Assegura que x seja 1D
-    x = x.reshape(-1)
-
-    # Se y for 1D, plota uma única curva
-    if y.ndim == 1:
-        min_len = min(x.shape[0], y.shape[0])
-        plt.plot(x[:min_len], y[:min_len])
-        plt.show()
-        return
-
-    # Se y for 2D, cada linha é uma curva; itera sobre as linhas de y
-    n_curves = y.shape[0]
-    for i in range(n_curves):
-        yi = y[i]
-        # Ajusta o comprimento para combinar com x se necessário
-        min_len = min(x.shape[0], yi.shape[0])
-        plt.plot(x[:min_len], yi[:min_len])
-        plt.show()
-
-
 def apply_ormsby_frequency_domain(spectrum, freq_axis, points=[5, 10, 60, 80]):
     """
     Aplica um filtro trapezoidal (Ormsby) diretamente em um espectro de amplitude.
@@ -442,85 +284,64 @@ def apply_ormsby_frequency_domain(spectrum, freq_axis, points=[5, 10, 60, 80]):
     - mask: O desenho do filtro (vetor de 0 a 1) para visualização (mesmo tipo da entrada).
     """
     a, b, c, d = points
-
+    spectrum = spectrum.detach().numpy()
+    
     # Previne divisão por zero se o usuário colocar rampas verticais (b=a ou d=c)
-    epsilon = 1e-10
+    epsilon = 1e-10 
+    
+    # Criação da máscara (filtro) inicializada com zeros
+    mask = np.zeros_like(spectrum)
+        
+    # 1. Rampa de Subida (a < f <= b)
+    # Fórmula da reta: (f - a) / (b - a)
+    idx_up = (freq_axis > a) & (freq_axis <= b)
+    mask[..., idx_up] = (freq_axis[idx_up] - a) / (b - a + epsilon)
+    
+    # 2. Platô / Pass-band (b < f <= c)
+    # Valor é 1.0 constante
+    idx_pass = (freq_axis > b) & (freq_axis <= c)
+    mask[..., idx_pass] = 1.0
+    
+    # 3. Rampa de Descida (c < f <= d)
+    # Fórmula da reta descendo: 1 - (f - c) / (d - c)
+    idx_down = (freq_axis > c) & (freq_axis <= d)
+    mask[..., idx_down] = 1.0 - (freq_axis[idx_down] - c) / (d - c + epsilon)
+        
+    # Aplicação do filtro (Multiplicação ponto a ponto)
+    filtered_spectrum = spectrum * mask
+    
+    return torch.tensor(filtered_spectrum, dtype=torch.float32), mask
 
-    # Caso pelo menos uma entrada seja um tensor torch, faça tudo com torch
-    is_torch = isinstance(spectrum, torch.Tensor) or isinstance(freq_axis, torch.Tensor)
 
-    if is_torch:
-        # Determina dispositivo e dtype alvo
-        if isinstance(spectrum, torch.Tensor):
-            device = spectrum.device
-            dtype = spectrum.dtype
-        elif isinstance(freq_axis, torch.Tensor):
-            device = freq_axis.device
-            dtype = freq_axis.dtype
-        else:
-            # fallback (não deve acontecer)
-            device = None
-            dtype = None
+def r_coefficient(x, y):
+    x = np.asarray(x)
+    y = np.asarray(y)
 
-        # Converte entradas não-torch para torch no dispositivo/dtype apropriado
-        if not isinstance(spectrum, torch.Tensor):
-            spectrum = torch.tensor(np.asarray(spectrum), device=device, dtype=dtype)
-        else:
-            spectrum = spectrum.to(device=device, dtype=dtype)
+    if x.shape != y.shape:
+        raise ValueError("x and y must have the same shape")
 
-        if not isinstance(freq_axis, torch.Tensor):
-            freq_axis = torch.tensor(np.asarray(freq_axis), device=device, dtype=dtype)
-        else:
-            freq_axis = freq_axis.to(device=device, dtype=dtype)
+    x_mean = x.mean()
+    y_mean = y.mean()
 
-        # Criação da máscara (filtro) inicializada com zeros (mesma shape de spectrum)
-        mask = torch.zeros_like(spectrum)
+    numerator = np.sum((x - x_mean) * (y - y_mean))
+    denominator = np.sqrt(
+        np.sum((x - x_mean)**2) * np.sum((y - y_mean)**2)
+    )
 
-        # 1. Rampa de Subida (a < f <= b)
-        idx_up = (freq_axis > a) & (freq_axis <= b)
-        if idx_up.any():
-            mask[..., idx_up] = (freq_axis[idx_up] - a) / (b - a + epsilon)
+    return numerator / denominator
 
-        # 2. Platô / Pass-band (b < f <= c)
-        idx_pass = (freq_axis > b) & (freq_axis <= c)
-        if idx_pass.any():
-            mask[..., idx_pass] = torch.tensor(1.0, device=device, dtype=dtype)
+def rolling_window(a, window):
+    if window % 2 == 0:
+        window += 1
+    shape = a.shape[:-1] + (a.shape[-1] - window + 1, window)
+    strides = a.strides + (a.strides[-1],)
+    rolled = np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides)
+    return rolled
 
-        # 3. Rampa de Descida (c < f <= d)
-        idx_down = (freq_axis > c) & (freq_axis <= d)
-        if idx_down.any():
-            mask[..., idx_down] = 1.0 - (freq_axis[idx_down] - c) / (d - c + epsilon)
-
-        # Aplicação do filtro (Multiplicação ponto a ponto)
-        filtered_spectrum = spectrum * mask
-
-        return filtered_spectrum, mask
-    else:
-        # Versão NumPy (comportamento original)
-        a, b, c, d = points
-
-        # Previne divisão por zero se o usuário colocar rampas verticais (b=a ou d=c)
-        epsilon = 1e-10
-
-        # Criação da máscara (filtro) inicializada com zeros
-        mask = np.zeros_like(spectrum)
-
-        # 1. Rampa de Subida (a < f <= b)
-        # Fórmula da reta: (f - a) / (b - a)
-        idx_up = (freq_axis > a) & (freq_axis <= b)
-        mask[..., idx_up] = (freq_axis[idx_up] - a) / (b - a + epsilon)
-
-        # 2. Platô / Pass-band (b < f <= c)
-        # Valor é 1.0 constante
-        idx_pass = (freq_axis > b) & (freq_axis <= c)
-        mask[..., idx_pass] = 1.0
-
-        # 3. Rampa de Descida (c < f <= d)
-        # Fórmula da reta descendo: 1 - (f - c) / (d - c)
-        idx_down = (freq_axis > c) & (freq_axis <= d)
-        mask[..., idx_down] = 1.0 - (freq_axis[idx_down] - c) / (d - c + epsilon)
-
-        # Aplicação do filtro (Multiplicação ponto a ponto)
-        filtered_spectrum = spectrum * mask
-
-        return filtered_spectrum, mask
+def despike(curve, curve_sm, z=2):
+    spikes = np.where(curve - curve_sm > z)[0]
+    spukes = np.where(curve_sm - curve > z)[0]
+    out = np.copy(curve)
+    out[spikes] = curve_sm[spikes] + z  # Clip at the max allowed diff
+    out[spukes] = curve_sm[spukes] - z  # Clip at the min allowed diff
+    return out

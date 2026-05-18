@@ -1,67 +1,51 @@
 import torch
 import torch.nn as nn
 
-from utils import normalization
-from welltie.geophysics import ricker_wavelet
-
-
 class DualTaskAE(nn.Module):
-    def __init__(self):
+    def __init__(self, output_length):
         super(DualTaskAE, self).__init__()
 
-        filters = 32
-        latent_filters = 8
-        wavelet_filters = 8
-        kernel_size = 3
-
         self.encoder = nn.Sequential(
-            nn.Conv1d(1, filters, kernel_size=kernel_size, stride=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(filters, filters, kernel_size=kernel_size, stride=2, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(
-                filters, latent_filters, kernel_size=kernel_size, stride=1, padding=1
-            ),
-            nn.ReLU(inplace=True),
+            nn.Conv1d(1, 32, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv1d(32, 32, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv1d(32, 8, kernel_size=3, stride=1, padding=1),
+            nn.ReLU()
         )
 
         self.seismic_decoder = nn.Sequential(
-            nn.ConvTranspose1d(
-                latent_filters,
-                filters,
-                kernel_size=kernel_size,
-                stride=2,
-                padding=1,
-                output_padding=1,
-            ),
-            nn.ReLU(inplace=True),
-            nn.ConvTranspose1d(
-                filters,
-                1,
-                kernel_size=kernel_size,
-                stride=3,
-                padding=1,
-                output_padding=2,
-            ),
+            nn.ConvTranspose1d(8, 32, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose1d(32, 1, kernel_size=4, stride=2, padding=1),
         )
 
         self.wavelet_branch = nn.Sequential(
-            nn.Conv1d(
-                latent_filters, wavelet_filters, kernel_size=5, stride=1, padding=2
-            ),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(
-                wavelet_filters, wavelet_filters, kernel_size=5, stride=1, padding=2
-            ),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(wavelet_filters, 1, kernel_size=5, stride=1, padding=2),
+            nn.ConvTranspose1d(8, 8, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose1d(8, 8, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose1d(8, 8, kernel_size=3, stride=1, padding=1),
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),
+            nn.Linear(8, output_length)
         )
 
     def forward(self, s_noyse):
         latent = self.encoder(s_noyse)
         s_syn = self.seismic_decoder(latent)
         w = self.wavelet_branch(latent)
-        w = normalization(w)
+        #w = normalization(w)
+
+        t = s_noyse.shape[-1]
+        t2 = s_syn.shape[-1]
+
+        if t2 > t:
+            s_syn = s_syn[..., :t]
+        elif t2 < t:
+            pad = t - t2
+            s_syn = nn.functional.pad(s_syn, (0, pad))
+            
         return s_syn, w
 
 
@@ -69,67 +53,41 @@ class TimeShiftPredictor(nn.Module):
     def __init__(self):
         super(TimeShiftPredictor, self).__init__()
 
-        kernel_size = 3
+        kernel_size=9
         filters = 32
+        filters2 = 64
         concat_filter = 16
 
-        stride = 1
-        padding = 1  # TODO CALCULAR NOVAMENTE OS DOIS
-
         self.synthetic_network = nn.Sequential(
-            nn.Conv1d(
-                1, filters, kernel_size=kernel_size, stride=stride, padding=padding
-            ),
+            nn.Conv1d(1, filters, kernel_size=kernel_size, padding="same"),
+            nn.BatchNorm1d(filters),
             nn.ReLU(inplace=True),
-            nn.Conv1d(
-                filters,
-                filters,
-                kernel_size=kernel_size,
-                stride=stride,
-                padding=padding,
-            ),
+            nn.Conv1d(filters, filters2, kernel_size=kernel_size, padding="same", dilation=2),
+            nn.BatchNorm1d(filters2),
             nn.ReLU(inplace=True),
         )
 
         self.truth_network = nn.Sequential(
-            nn.Conv1d(
-                1, filters, kernel_size=kernel_size, stride=stride, padding=padding
-            ),
+            nn.Conv1d(1, filters, kernel_size=kernel_size, padding="same"),
+            nn.BatchNorm1d(filters),
             nn.ReLU(inplace=True),
-            nn.Conv1d(
-                filters,
-                filters,
-                kernel_size=kernel_size,
-                stride=stride,
-                padding=padding,
-            ),
+            nn.Conv1d(filters, filters2, kernel_size=kernel_size, padding="same", dilation=2),
+            nn.BatchNorm1d(filters2),
             nn.ReLU(inplace=True),
         )
 
         self.concat_network = nn.Sequential(
-            nn.Conv1d(
-                2 * filters,
-                concat_filter,
-                kernel_size=kernel_size,
-                stride=stride,
-                padding=padding,
-            ),
+            nn.Conv1d(2 * filters2, concat_filter, kernel_size=kernel_size, padding="same"),
+            nn.BatchNorm1d(concat_filter),
             nn.ReLU(inplace=True),
-            nn.Conv1d(
-                concat_filter,
-                1,
-                kernel_size=kernel_size,
-                stride=stride,
-                padding=padding,
-            ),
-            nn.ReLU(inplace=True),
+            nn.Conv1d(concat_filter, 1, kernel_size=kernel_size, padding="same"),
         )
 
     def forward(self, s, s_syn):
         conv_s = self.truth_network(s)
-        conv_s_synth = self.synthetic_network(s_syn)
+        conv_s_syn = self.synthetic_network(s_syn)
 
-        x = torch.cat([s, s_syn], dim=1)
+        x = torch.cat([conv_s, conv_s_syn], dim=1)
 
         return self.concat_network(x)
 
