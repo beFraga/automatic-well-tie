@@ -1,6 +1,5 @@
 from welltie.dataset import SeismicDataset
 from welltie.model import DualModel
-from utils import plotar_amostras_como_curvas, plot, plot_axis
 
 import torch
 import sys
