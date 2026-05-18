@@ -20,7 +20,6 @@ class BaseDataset(Dataset):
         if self.data.ndim == 2:
             self.data = self.data.unsqueeze(1)
 
-
         indices = torch.randperm(len(self.data))
         N = len(self.data)
         n_train = int(train_ratio * N)
@@ -28,17 +27,23 @@ class BaseDataset(Dataset):
         n_test = N - n_train - n_val
 
         train_idx = indices[:n_train]
-        val_idx = indices[n_train:n_train+n_val]
-        test_idx = indices[n_train+n_val:]
+        val_idx = indices[n_train : n_train + n_val]
+        test_idx = indices[n_train + n_val :]
 
         self.train_set = Subset(self.data, train_idx)
         self.val_set = Subset(self.data, val_idx)
         self.test_set = Subset(self.data, test_idx)
 
-        self.train_loader = DataLoader(self.train_set, batch_size=batch_size, shuffle=True)
-        self.val_loader   = DataLoader(self.val_set, batch_size=batch_size//2, shuffle=False)
-        self.test_loader  = DataLoader(self.test_set, batch_size=batch_size//2, shuffle=False)
-    
+        self.train_loader = DataLoader(
+            self.train_set, batch_size=batch_size, shuffle=True
+        )
+        self.val_loader = DataLoader(
+            self.val_set, batch_size=batch_size // 2, shuffle=False
+        )
+        self.test_loader = DataLoader(
+            self.test_set, batch_size=batch_size // 2, shuffle=False
+        )
+
     def get_loaders(self):
         return self.train_loader, self.val_loader, self.test_loader
 
@@ -50,7 +55,6 @@ class BaseDataset(Dataset):
         if x.ndim == 1:
             x = x.unsqueeze(0)
         return x
-
 
 
 class SeismicDataset(BaseDataset):
@@ -66,15 +70,19 @@ class SeismicDataset(BaseDataset):
                 t0_ms = 0.0
 
             t0_s = t0_ms * 1e-3
-            self.duration = t0_s + np.arange(int(f.samples.size), dtype=np.float64) * self.dt
-            seis_subset = take_closers_trace_well(locs, xs, ys, args["syfile"], k=int(args["train_size"]/len(locs)))
+            self.duration = (
+                t0_s + np.arange(int(f.samples.size), dtype=np.float64) * self.dt
+            )
+            seis_subset = take_closers_trace_well(
+                locs, xs, ys, args["syfile"], k=int(args["train_size"] / len(locs))
+            )
             self.s = torch.tensor(seis_subset, dtype=torch.float32).unsqueeze(1)
             for s in seis_subset:
                 db_random = np.random.normal(30, 8)
                 n_s, shift = add_awgn(s, db_random)
                 n_seis.append(n_s)
 
-        self.s_noise  = torch.tensor(np.array(n_seis), dtype=torch.float32).unsqueeze(1)
+        self.s_noise = torch.tensor(np.array(n_seis), dtype=torch.float32).unsqueeze(1)
 
         full_dataset = TensorDataset(self.s, self.s_noise)
 
@@ -82,14 +90,11 @@ class SeismicDataset(BaseDataset):
         n_train = int(train_ratio * N)
         n_val = N - n_train
 
-        self.train_set, self.val_set = random_split(
-            full_dataset, [n_train, n_val]
-        )
+        self.train_set, self.val_set = random_split(full_dataset, [n_train, n_val])
 
         test_data = take_well_traces(locs, xs, ys, args["syfile"])
         zeros = torch.zeros(test_data.shape)
         self.test_set = TensorDataset(test_data, zeros)
-
 
         # n_val = int(val_ratio * N)
         # n_test = N - n_train - n_val
@@ -98,10 +103,15 @@ class SeismicDataset(BaseDataset):
         #     full_dataset, [n_train, n_val, n_test]
         # )
 
-        self.train_loader = DataLoader(self.train_set, batch_size=batch_size, shuffle=True)
-        self.val_loader   = DataLoader(self.val_set, batch_size=batch_size//2, shuffle=False)
-        self.test_loader  = DataLoader(self.test_set, batch_size=batch_size//2, shuffle=False)
-    
+        self.train_loader = DataLoader(
+            self.train_set, batch_size=batch_size, shuffle=True
+        )
+        self.val_loader = DataLoader(
+            self.val_set, batch_size=batch_size // 2, shuffle=False
+        )
+        self.test_loader = DataLoader(
+            self.test_set, batch_size=batch_size // 2, shuffle=False
+        )
 
     def get_loaders(self):
         return self.train_loader, self.val_loader, self.test_loader
@@ -417,9 +427,10 @@ class MLPDataset(BaseDataset):
     - args: dicionário com parâmetros necessários (ex.: 'train', 'lasdir', 'syfile', 'train_size', 'model')
     - train_ratio, val_ratio, batch_size: configurações de divisão de conjuntos e loaders
     """
+
     def __init__(self, n, args, train_ratio=0.7, val_ratio=0.2, batch_size=32):
         self.args = args
-        if (args["train"]):
+        if args["train"]:
             self.set_train_dataset(n)
         else:
             self.set_dataset()
@@ -435,10 +446,15 @@ class MLPDataset(BaseDataset):
             full_dataset, [n_train, n_val, n_test]
         )
 
-        self.train_loader = DataLoader(self.train_set, batch_size=batch_size, shuffle=True)
-        self.val_loader   = DataLoader(self.val_set, batch_size=batch_size//2, shuffle=False)
-        self.test_loader  = DataLoader(self.test_set, batch_size=batch_size//2, shuffle=False)
-    
+        self.train_loader = DataLoader(
+            self.train_set, batch_size=batch_size, shuffle=True
+        )
+        self.val_loader = DataLoader(
+            self.val_set, batch_size=batch_size // 2, shuffle=False
+        )
+        self.test_loader = DataLoader(
+            self.test_set, batch_size=batch_size // 2, shuffle=False
+        )
 
     def get_loaders(self):
         """Retorna os DataLoaders para treino, validação e teste.
@@ -457,7 +473,6 @@ class MLPDataset(BaseDataset):
         Retorna uma tupla (`s[idx]`, `w[idx]`, `r[idx]`) onde cada elemento é um tensor.
         """
         return self.s[idx], self.w[idx], self.r[idx]
-    
 
     def set_train_dataset(self, n):
         """Gera um dataset sintético para treino.
@@ -484,10 +499,10 @@ class MLPDataset(BaseDataset):
             s = adjust_data_length(s)
             ss.append(s)
             ws.append(w)
-        self.s  = torch.tensor(np.array(ss), dtype=torch.float32)
-        self.w  = torch.tensor(np.array(ws), dtype=torch.float32)
-        self.r  = torch.empty(self.s.shape, dtype=torch.float32)
-    
+        self.s = torch.tensor(np.array(ss), dtype=torch.float32)
+        self.w = torch.tensor(np.array(ws), dtype=torch.float32)
+        self.r = torch.empty(self.s.shape, dtype=torch.float32)
+
     def set_dataset(self):
         """Carrega dataset a partir de arquivos LAS (poços) e SEGY (sísmica).
 
@@ -505,9 +520,14 @@ class MLPDataset(BaseDataset):
         seismics = []
         for lasfile in lasdir.iterdir():
             las = lasio.read(lasfile)
-            loc = list(map(float, las.well['LOC'].value.replace(" ", "").split("X=")[1].split("Y=")))
+            loc = list(
+                map(
+                    float,
+                    las.well["LOC"].value.replace(" ", "").split("X=")[1].split("Y="),
+                )
+            )
             locs.append(loc)
-            rho = las['RHOB']
+            rho = las["RHOB"]
             dt = las["DT"]
             print("rho", rho.shape)
             vp = (1 / dt) * 1e6
@@ -520,10 +540,14 @@ class MLPDataset(BaseDataset):
             rs.append(r_adj.cpu().numpy())
         locs = np.array(locs) * 10
         with segyio.open(syfile, "r", strict=False) as f:
-            xs = np.array([f.header[i][segyio.TraceField.CDP_X] for i in range(f.tracecount)])
-            ys = np.array([f.header[i][segyio.TraceField.CDP_Y] for i in range(f.tracecount)])
+            xs = np.array(
+                [f.header[i][segyio.TraceField.CDP_X] for i in range(f.tracecount)]
+            )
+            ys = np.array(
+                [f.header[i][segyio.TraceField.CDP_Y] for i in range(f.tracecount)]
+            )
             for loc in locs:
-                distances = np.sqrt((xs - loc[0])**2 + (ys - loc[1])**2)
+                distances = np.sqrt((xs - loc[0]) ** 2 + (ys - loc[1]) ** 2)
                 closest_trace_idx = np.argmin(distances)
                 # Ajusta cada trace para o comprimento alvo antes de armazenar
                 seis_adj = adjust_data_length(f.trace[closest_trace_idx])
@@ -535,7 +559,7 @@ class MLPDataset(BaseDataset):
         self.w = torch.empty(self.s.shape, dtype=torch.float32)
 
     def select_wavelet(self, dt=0.004, nt=97, device="cpu"):
-            """Seleciona e gera uma wavelet aleatória.
+        """Seleciona e gera uma wavelet aleatória.
 
         Escolhe aleatoriamente um tipo entre 'ricker', 'gabor', 'ormsby', 'klauder' e 'sinc',
         sorteia parâmetros relevantes (frequências) e retorna a wavelet como um tensor no
@@ -546,29 +570,30 @@ class MLPDataset(BaseDataset):
         - nt: número de amostras da wavelet
         - device: dispositivo destino do tensor ('cpu' ou 'cuda')
         """
-            choice = random.choice(['ricker', 'gabor', 'ormsby', 'klauder', 'sinc'])
-            f = random.uniform(5, 125)  # frequência principal
+        choice = random.choice(["ricker", "gabor", "ormsby", "klauder", "sinc"])
+        # choice = random.choice(["sinc"])
+        f = random.uniform(5, 125)  # frequência principal
 
-            if choice == 'ricker':
-                w = ricker_wavelet(f, dt, nt)
-            elif choice == 'gabor':
-                w = gabor_wavelet(f, dt, nt)
-            elif choice == 'ormsby':
-                f1 = random.uniform(5, 20)
-                f2 = f1 + random.uniform(5, 10)
-                f3 = f2 + random.uniform(20, 40)
-                f4 = f3 + random.uniform(20, 40)
-                w = ormsby_wavelet(f1, f2, f3, f4, dt, nt)
-            elif choice == 'klauder':
-                f1 = random.uniform(5, 20)
-                f2 = random.uniform(60, 125)
-                t = 0.2
-                w = klauder_wavelet(f1, f2, t, dt)
-            else:  # 'sinc'
-                w = sinc_wavelet(f, dt, nt)
+        if choice == "ricker":
+            w = ricker_wavelet(f, dt, nt)
+        elif choice == "gabor":
+            w = gabor_wavelet(f, dt, nt)
+        elif choice == "ormsby":
+            f1 = random.uniform(5, 20)
+            f2 = f1 + random.uniform(5, 10)
+            f3 = f2 + random.uniform(20, 40)
+            f4 = f3 + random.uniform(20, 40)
+            w = ormsby_wavelet(f1, f2, f3, f4, dt, nt)
+        elif choice == "klauder":
+            f1 = random.uniform(5, 20)
+            f2 = random.uniform(60, 125)
+            t = 0.2
+            w = klauder_wavelet(f1, f2, t, dt)
+        else:  # 'sinc'
+            w = sinc_wavelet(f, dt, nt)
 
-            return w.to(device)
-    
+        return w.to(device)
+
 
 
 def take_well_data(lasdir):
@@ -614,14 +639,19 @@ def take_coordinates_trace(lasdir, syfile, angola):
         locs.append(loc)
     locs = np.array(locs)
     with segyio.open(syfile, "r", strict=False) as f:
-        xs = np.array([f.header[i][segyio.TraceField.CDP_X] for i in range(f.tracecount)])
-        ys = np.array([f.header[i][segyio.TraceField.CDP_Y] for i in range(f.tracecount)])
+        xs = np.array(
+            [f.header[i][segyio.TraceField.CDP_X] for i in range(f.tracecount)]
+        )
+        ys = np.array(
+            [f.header[i][segyio.TraceField.CDP_Y] for i in range(f.tracecount)]
+        )
         return xs, ys, locs
+
 
 def take_closers_trace_well(locs, xs, ys, syfile, k=1000):
     indices = []
     for loc in locs:
-        distances = np.sqrt((xs - loc[0])**2 + (ys - loc[1])**2)
+        distances = np.sqrt((xs - loc[0]) ** 2 + (ys - loc[1]) ** 2)
         ind = np.argpartition(distances, k)[:k]
         ind = ind[np.argsort(distances[ind])]
         indices.append(ind)
@@ -636,7 +666,7 @@ def take_well_traces(locs, xs, ys, syfile):
     seismics = []
     with segyio.open(syfile, "r", strict=False) as f:
         for loc in locs:
-            distances = np.sqrt((xs - loc[0])**2 + (ys - loc[1])**2)
+            distances = np.sqrt((xs - loc[0]) ** 2 + (ys - loc[1]) ** 2)
             closest_trace_idx = np.argmin(distances)
             seismics.append(f.trace[closest_trace_idx])
     return torch.tensor(np.array(seismics), dtype=torch.float32).unsqueeze(1)

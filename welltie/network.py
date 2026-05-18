@@ -31,7 +31,6 @@ class DualTaskAE(nn.Module):
             nn.Linear(8, output_length)
         )
 
-
     def forward(self, s_noyse):
         latent = self.encoder(s_noyse)
         s_syn = self.seismic_decoder(latent)
@@ -48,8 +47,6 @@ class DualTaskAE(nn.Module):
             s_syn = nn.functional.pad(s_syn, (0, pad))
             
         return s_syn, w
-
-
 
 
 class TimeShiftPredictor(nn.Module):
@@ -93,14 +90,12 @@ class TimeShiftPredictor(nn.Module):
         x = torch.cat([conv_s, conv_s_syn], dim=1)
 
         return self.concat_network(x)
-    
-
 
 
 class MLPWaveletExtractor(nn.Module):
     def __init__(self):
         super(MLPWaveletExtractor, self).__init__()
-        
+
         self.network = nn.Sequential(
             nn.Linear(300, 300),
             nn.Tanh(),
@@ -110,9 +105,12 @@ class MLPWaveletExtractor(nn.Module):
             nn.Tanh(),
             nn.Linear(200, 97),
             nn.Tanh(),
-            nn.Linear(97, 97)
+            nn.Linear(97, 97),
         )
 
-
     def forward(self, x):
-        return self.network(x)
+        w = self.network(x)
+        # normaliza a wavelet gerada para energia unitária (compatível com outras partes do código)
+        denom = torch.sqrt(torch.sum(w**2, dim=-1, keepdim=True) + 1e-8)
+        w = w / denom
+        return w

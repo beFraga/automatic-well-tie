@@ -1,5 +1,10 @@
+import random
+
 import torch
 import torch.nn.functional as F
+
+from utils import apply_ormsby_frequency_domain, normalization
+from utils_spectrum import get_freqs, get_power_spectra
 from welltie.geophysics import ricker_wavelet
 
 from utils import apply_ormsby_frequency_domain
@@ -7,21 +12,25 @@ from utils_spectrum import get_amplitude_spectra, gaussian_smoothing_1d
 
 class BaseLoss(object):
     key_names = None
+
     def __init__(self):
         if self.key_names == None:
-            raise NotImplementedError("Losses subclasses must implement `key_names` attribute")
+            raise NotImplementedError(
+                "Losses subclasses must implement `key_names` attribute"
+            )
 
-        if 'total' not in self.key_names:
+        if "total" not in self.key_names:
             raise NotImplementedError("The key `total` must be present for backdrop")
 
+
 class DualTaskLoss(BaseLoss):
-    key_names = ('total', 'reconstruction', 'spectral')
+    key_names = ("total", "reconstruction", "spectral")
 
     def __init__(self, parameters):
         self.key_names = DualTaskLoss.key_names
         super().__init__()
 
-        self.alpha = parameters['alpha']
+        self.alpha = parameters["alpha"]
 
         self.dt = parameters["dt"]
         self.duration = parameters["duration"]
@@ -38,16 +47,14 @@ class DualTaskLoss(BaseLoss):
         loss_total = loss_reconstruction + self.alpha * loss_spectral
 
         loss = {
-                'total': loss_total,
-                'reconstruction': loss_reconstruction,
-                'spectral': loss_spectral,
-               }
+            "total": loss_total,
+            "reconstruction": loss_reconstruction,
+            "spectral": loss_spectral,
+        }
         return loss
 
 
     def pre_train(self, s, s_rec, spec_w):
-        # s = normalization(s)
-        # s_rec = normalization(s_rec)
         loss_reconstruction = F.mse_loss(s, s_rec) # ||s - s'|| ^ 2
 
         ricker = ricker_wavelet(30, self.dt, spec_w.shape[-1]).to(spec_w.device)
@@ -63,9 +70,9 @@ class DualTaskLoss(BaseLoss):
 
         loss_total = F.mse_loss(spec_w, spec_r) + loss_reconstruction
         loss = {
-            'total': loss_total,
-            'reconstruction': loss_reconstruction,
-            'spectral': torch.tensor(0.0)
+            "total": loss_total,
+            "reconstruction": loss_reconstruction,
+            "spectral": torch.tensor(0.0),
         }
         return loss
 
@@ -120,7 +127,7 @@ class TimeShiftLoss(BaseLoss):
 
 
 class MLPLoss(BaseLoss):
-    key_names = ('total', 'logcosh', 'cosine_similarity')
+    key_names = ("total", "logcosh", "cosine_similarity")
 
     def __init__(self):
         self.key_names = MLPLoss.key_names
@@ -129,13 +136,12 @@ class MLPLoss(BaseLoss):
     def __call__(self, y, y_):
         lch = self.logcosh(y, y_)
         cos = torch.nn.CosineSimilarity()
+        # cosine similarity in [ -1, 1 ] -> we want a loss that decreases when
+        # similarity increases, so use (1 - mean_cosine)
         cs = torch.mean(cos(y, y_))
-        total = lch + cs
-        loss = {
-            'total': total,
-            'logcosh': lch,
-            'cosine_similarity': cs
-        }
+        cos_loss = 1.0 - cs
+        total = lch + cos_loss
+        loss = {"total": total, "logcosh": lch, "cosine_similarity": cs}
         return loss
 
     def logcosh(self, y, y_):
