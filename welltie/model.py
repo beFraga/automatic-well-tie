@@ -240,7 +240,6 @@ class DualModel(BaseModel):
             count_loop += 1
             self.optimizer.zero_grad()
 
-            # Move tensores para a GPU
             s_noise = s_noise.to(self.device)
             s = s.to(self.device)
 
@@ -278,9 +277,6 @@ class DualModel(BaseModel):
             s_noise = s_noise.to(self.device)
             s = s.to(self.device)
 
-            s_noise = normalization(s_noise)
-            s = normalization(s)
-
             s_syn, spec_w = self.net(s_noise)
 
             s_syn = s_syn.to(self.device)
@@ -289,8 +285,6 @@ class DualModel(BaseModel):
             loss = self.loss.pre_train(s, s_syn, spec_w)
             loss["total"].backward()
             self.optimizer.step()
-            # if self.cur_epoch == self.pre_train_epochs - 1 and count_loop == 1:
-                # plot(spec_w[0].detach().numpy())
 
             for key in self.loss.key_names:
                 loss_numerics[key] += loss[key].item()
@@ -328,33 +322,23 @@ class DualModel(BaseModel):
 
     def run_test(self):
         result = {"s": [], "s_syn": [], "w": [], "w_spec": [], "x_f": np.array(self.freqs), "s_spec": [], "x": np.array(self.full_dur), "dt": np.array(self.dt)}
-        # print(self.freqs)
 
         self.net.eval()
 
         with torch.no_grad():
             for s, _ in self.test_dataset:
-                # Move tensores para a GPU
                 s = s.to(self.device)
                 s_syn, spec_w = self.net(s)
 
-                # s = normalization(s)
-                # s_syn = normalization(s_syn)
-
                 spec_w = spec_w.to(self.device)
-                # spec_w = get_amplitude_spectra(w, self.duration, self.dt)
                 spec_s = get_amplitude_spectra(s, self.duration, self.dt)
-                # filtered_w, _ = apply_ormsby_frequency_domain(spec_w, self.freqs)
-                # print(pad_w)
-
 
                 pool_s = gaussian_smoothing_1d(spec_s, kernel_size=65, sigma=10)
                 
-
                 filtered_s, _ = apply_ormsby_frequency_domain(pool_s, self.freqs)
                 filtered_w, _ = apply_ormsby_frequency_domain(spec_w, self.freqs)
 
-                new_w = torch.fft.irfft(spec_w, n=128)
+                new_w = torch.fft.irfft(filtered_w, n=128)
                 new_w = torch.roll(new_w, shifts=new_w.shape[-1] // 2, dims=-1)
 
                 result["s_syn"].append(np.squeeze(s_syn.detach().cpu().numpy()))
@@ -372,15 +356,13 @@ class DualModel(BaseModel):
     
     def process(self, s):
         s = torch.tensor(s, dtype=torch.float32).unsqueeze(0)
-        s = normalization(s).to(self.device)
-        _, w = self.net(s)
-        w = w.to(self.device)
-        spec_w = get_amplitude_spectra(w, self.duration, self.dt)
+        s = s.to(self.device)
+        _, spec_w = self.net(s)
         filtered_w, _ = apply_ormsby_frequency_domain(spec_w, self.freqs)
-        new_w = torch.fft.irfft(filtered_w, n=w.shape[-1])
+        new_w = torch.fft.irfft(filtered_w, n=128)
         new_w = torch.roll(new_w, shifts=new_w.shape[-1] // 2, dims=-1)
-
         return new_w
+
 
 
 
@@ -419,7 +401,6 @@ class TimeShiftModel(BaseModel):
             count_loop += 1
             self.optimizer.zero_grad()
 
-            # Move tensores para a GPU
             s = s.to(self.device)
             s_syn = s_syn.to(self.device)
             ts = ts.to(self.device)
@@ -448,7 +429,6 @@ class TimeShiftModel(BaseModel):
         for s, s_syn, ts, mask in self.val_dataset:
             count_loop += 1
 
-            # Move tensores para a GPU
             s = s.to(self.device)
             s_syn = s_syn.to(self.device)
             ts = ts.to(self.device)
@@ -475,7 +455,6 @@ class TimeShiftModel(BaseModel):
         with torch.no_grad():
             # Colocar ts antes de mask caso rode na versão sintetica
             for s, s_syn, ts, mask, t2, z_t, w in self.test_dataset:
-                # Move tensores para a GPU
                 s = s.to(self.device)
                 s_syn = s_syn.to(self.device)
                 ts_syn = self.net(s, s_syn)
