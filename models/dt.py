@@ -47,19 +47,21 @@ def train():
     dataset = SeismicDataset({"syfile": SEGY_FILE, "lasdir": LOGS_PATH, "train_size": params["train_sample"]}, batch_size=params['batch_size'], angola=True)
 
     print(f"Generated {len(dataset)} samples")
-    model = DualModel(SAVE_DIR, dataset, params, device=device, state_dict="dualmodel_state_dict_f3.pt")
+    model = DualModel(SAVE_DIR, dataset, params, device=device, state_dict="dualmodel_state_dict_angola.pt")
     model.train()
 
     print("Total training time (DualTask):")
     print(time.time() - start_time)
     print("Loss total (DualTask):")
     print(model.history["train_loss_total"])
-    for k,v in model.history.items():
-        if "train" not in k:
-            continue
-        plt.plot(v)
-        plt.title(k)
-        plt.show()
+
+    plt.plot(model.history["train_loss_total"])
+    plt.plot(model.history["validation_loss_total"])
+    plt.title("Loss")
+    plt.legend(["Train", "Validation"], loc="upper right")
+    plt.xlabel("Epoch")
+    plt.show()
+
     run(dataset=dataset)
 
 
@@ -71,7 +73,7 @@ def run(dataset=None):
         dataset = SeismicDataset({"syfile": SEGY_FILE, "lasdir": LOGS_PATH, "train_size": params["train_sample"]}, angola=True)
 
     print(f"Generated {len(dataset)} samples")
-    model = DualModel(SAVE_DIR, dataset, params)
+    model = DualModel(SAVE_DIR, dataset, params, state_dict="dualmodel_state_dict_angola.pt")
     model.load_network()
     results = model.run_test()
     

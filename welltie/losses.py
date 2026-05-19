@@ -3,8 +3,7 @@ import random
 import torch
 import torch.nn.functional as F
 
-from utils import apply_ormsby_frequency_domain, normalization
-from utils_spectrum import get_freqs, get_power_spectra
+from utils import apply_ormsby_frequency_domain
 from welltie.geophysics import ricker_wavelet
 
 from utils import apply_ormsby_frequency_domain

@@ -9,28 +9,29 @@ from scipy.interpolate import interp1d
 
 from welltie.network import DualTaskAE, TimeShiftPredictor, MLPWaveletExtractor
 from welltie.losses import DualTaskLoss, TimeShiftLoss, MLPLoss
-from welltie.geophysics import extract_seismic, extract_reflectivity, ricker
+from welltie.geophysics import extract_seismic, extract_reflectivity
 
-from utils import plot, normalization, apply_ormsby_frequency_domain
+from utils import normalization, apply_ormsby_frequency_domain
 from utils_spectrum import get_amplitude_spectra, get_freqs, gaussian_smoothing_1d
-
-import matplotlib.pyplot as plt
 
 class BaseModel:
     def __init__(self, save_dir, dataset, parameters, device=None, state_dict="trained_net_state_dict.pt", save_ckpt=False):
         self.state_dict = state_dict
         self.history_file = "history.pkl"
+        
         self.save_dir = save_dir
         if not self.save_dir.is_dir():
             self.save_dir.mkdir(parents=True, exist_ok=True)
         assert self.save_dir.is_dir()
+
         self._save_ckpt = save_ckpt
 
         self.start_time = time.time()
 
-        self.params = parameters
         self.start_epoch = 0
-        self.cur_epoch = self.start_epoch
+        self.cur_epoch = 0
+
+        self.params = parameters
         self.learning_rate = parameters["learning_rate"]
         self.batch_size = parameters["batch_size"]
         self.max_epochs = parameters["max_epochs"]
@@ -43,8 +44,12 @@ class BaseModel:
             self.device = device
 
         self.early_stopping = None
-
         self.schedulers = []
+
+        self.best_val_loss = float("inf")
+
+        self.history = {}
+
 
     def train_one_epoch(self):
         raise NotImplementedError()
@@ -52,42 +57,58 @@ class BaseModel:
     def validate_training(self):
         raise NotImplementedError()
 
-    def run(self):
-        raise NotImplementedError()
-
     def run_test(self):
         raise NotImplementedError()
+
+    def _append_history(self, metrics, prefix):
+        for key, value in metrics.items():
+
+            hist_key = f"{prefix}_{key}"
+
+            if hist_key not in self.history:
+                self.history[hist_key] = []
+
+            self.history[hist_key].append(float(value))
 
     def train(self):
         _div = len(self.train_dataset) / self.batch_size
         _remain = int(len(self.train_dataset) % self.batch_size > 0)
         num_it_per_epoch = _div + _remain
 
-        is_early_stop = False
         for e in tqdm(range(self.start_epoch, self.max_epochs)):
-            self.train_one_epoch()
-            current_val_loss = self.validate_training()
+            self.cur_epoch = e
+
+            self.net.train()
+            train_loss = self.train_one_epoch()
+
+            self.net.eval()
+            with torch.no_grad():
+                val_loss = self.validate_training()
+
+            self._append_history(train_loss, "train_loss")
+            self._append_history(val_loss, "validation_loss")
 
             if self.schedulers:
                 for sche in self.schedulers:
                     sche.step()
 
-            self.cur_epoch += 1
+            if val_loss["total"] < self.best_val_loss - 1e-4:
+                self.best_val_loss = val_loss
+                self.save_network()
 
             if self.early_stopping is not None:
-                is_early_stop = self.early_stopping.step(current_val_loss)
-                if is_early_stop:
+                if self.early_stopping.step(val_loss):
+                    print("Early stopping triggered.")
                     break
             
-
             if self._save_ckpt:
-                if (e % (self.max_epochs // 4) == 0) or (e == self.max_epochs - 1):
-                    ckpt_path = self.save_dir / ("ckpt_epoch%s.tar" % str(e + 1).zfill(3))
+                save_freq = max(1, self.max_epochs // 4)
+                if (save_freq == 0) or (e == self.max_epochs - 1):
+                    ckpt_path = self.save_dir / f"ckpt_epoch{str(e + 1).zfill(3)}.tar"
                     self.save_model_ckpt(ckpt_path, e)
 
         self.history["elapsed"] = time.time() - self.start_time
         self.save_history()
-        self.save_network()
 
     def save_network(self):
         torch.save(self.net.state_dict(), self.save_dir / self.state_dict)
@@ -106,23 +127,24 @@ class BaseModel:
 
         if "elapsed" in self.history:
             elapsed = self.history["elapsed"]
-            print(elapsed)
+            print(f"Elapsed time: {elapsed:.2f} seconds")
         
     def save_model_ckpt(self, path, epoch):
         torch.save({
             'epoch': epoch,
             'net_state_dict': self.net.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'loss': self.loss
+            'best_val_loss': self.best_val_loss,
+            'history': self.history,
         }, path)
 
     def restore_model_ckpt(self, ckpt_file):
         ckpt = torch.load(ckpt_file)
         self.net.load_state_dict(ckpt['net_state_dict'])
         self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-        self.start_epoch = ckpt['epoch']
-        self.cur_epoch = ckpt['epoch']
-        self.loss = ckpt['loss']
+        self.start_epoch = ckpt['epoch'] + 1
+        self.cur_epoch = self.start_epoch
+        self.history = ckpt.get("history", self.history)
 
 
 class DualModel(BaseModel):
@@ -164,32 +186,47 @@ class DualModel(BaseModel):
         )
         self.schedulers = [lr_scheduler]
 
-        self.history = {}
-        for key in self.loss.key_names:
-            self.history["train_loss_" + key] = []
-            self.history["val_loss_" + key] = []
-
     def train(self):
         _div = len(self.train_dataset) / self.batch_size
         _remain = int(len(self.train_dataset) % self.batch_size > 0)
         num_it_per_epoch = _div + _remain
 
-        for e in tqdm(range(self.start_epoch, self.max_epochs + self.pre_train_epochs)):
+        for e in tqdm(range(self.start_epoch, self.max_epochs)):
+            self.cur_epoch = e
+
             if self.cur_epoch < self.pre_train_epochs:
-                self.pre_train()
+                train_loss = self.pre_train()
             else:
-                self.train_one_epoch()
-            # current_val_loss = self.validate_training()
+                train_loss = self.train_one_epoch()
+
+            self.net.eval()
+            with torch.no_grad():
+                val_loss = self.validate_training()
+
+            self._append_history(train_loss, "train_loss")
+            self._append_history(val_loss, "validation_loss")
 
             if self.schedulers:
                 for sche in self.schedulers:
                     sche.step()
 
-            self.cur_epoch += 1
+            if val_loss["total"] < self.best_val_loss - 1e-4:
+                self.best_val_loss = val_loss["total"]
+                self.save_network()
+
+            if self.early_stopping is not None:
+                if self.early_stopping.step(val_loss):
+                    print("Early stopping triggered.")
+                    break
+            
+            if self._save_ckpt:
+                save_freq = max(1, self.max_epochs // 4)
+                if (save_freq == 0) or (e == self.max_epochs - 1):
+                    ckpt_path = self.save_dir / f"ckpt_epoch{str(e + 1).zfill(3)}.tar"
+                    self.save_model_ckpt(ckpt_path, e)
 
         self.history["elapsed"] = time.time() - self.start_time
         self.save_history()
-        self.save_network(self.save_dir / self.state_dict)
 
     def train_one_epoch(self):
         self.net.train()
@@ -219,9 +256,11 @@ class DualModel(BaseModel):
             for key in self.loss.key_names:
                 loss_numerics[key] += loss[key].item()
 
+        avg_losses = {}
         for key in self.loss.key_names:
-            _avg_numeric_loss = loss_numerics[key] / count_loop
-            self.history["train_loss_" + key].append(_avg_numeric_loss)
+            avg_losses[key] = loss_numerics[key] / count_loop
+
+        return avg_losses
 
     def pre_train(self):
         self.net.train()
@@ -250,15 +289,17 @@ class DualModel(BaseModel):
             loss = self.loss.pre_train(s, s_syn, spec_w)
             loss["total"].backward()
             self.optimizer.step()
-            if self.cur_epoch == self.pre_train_epochs - 1 and count_loop == 1:
-                plot(spec_w[0].detach().numpy())
+            # if self.cur_epoch == self.pre_train_epochs - 1 and count_loop == 1:
+                # plot(spec_w[0].detach().numpy())
 
             for key in self.loss.key_names:
                 loss_numerics[key] += loss[key].item()
 
+        avg_losses = {}
         for key in self.loss.key_names:
-            _avg_numeric_loss = loss_numerics[key] / count_loop
-            self.history["train_loss_" + key].append(_avg_numeric_loss)
+            avg_losses[key] = loss_numerics[key] / count_loop
+
+        return avg_losses
 
     def validate_training(self):
         loss_numerics = {}
@@ -266,23 +307,24 @@ class DualModel(BaseModel):
             loss_numerics[key] = 0.0
 
         count_loop = 0
-        with torch.no_grad():
-            self.net.eval()
-            for s, s_noise in self.val_dataset:
-                count_loop += 1
+        for s, s_noise in self.val_dataset:
+            count_loop += 1
+            
+            s = s.to(self.device)
+            s_noise = s_noise.to(self.device)
 
-                s_syn, w = self.net(s_noise)
+            s_syn, w = self.net(s_noise)
 
-                loss = self.loss(s, s_syn, w)
-
-                for key in self.loss.key_names:
-                    loss_numerics[key] += loss[key].item()
+            loss = self.loss(s, s_syn, w)
 
             for key in self.loss.key_names:
-                _avg_numeric_loss = loss_numerics[key] / count_loop
-                self.history["train_loss_" + key].append(_avg_numeric_loss)
+                loss_numerics[key] += loss[key].item()
 
-        return loss_numerics["total"] / count_loop
+        avg_losses = {}
+        for key in self.loss.key_names:
+            avg_losses[key] = loss_numerics[key] / count_loop
+
+        return avg_losses
 
     def run_test(self):
         result = {"s": [], "s_syn": [], "w": [], "w_spec": [], "x_f": np.array(self.freqs), "s_spec": [], "x": np.array(self.full_dur), "dt": np.array(self.dt)}
@@ -362,11 +404,6 @@ class TimeShiftModel(BaseModel):
             gamma=parameters["lr_decay_rate"],
         )
         self.schedulers = [lr_scheduler]
-
-        self.history = {}
-        for key in self.loss.key_names:
-            self.history["train_loss_" + key] = []
-            self.history["val_loss_" + key] = []
         
         self.t = dataset.t
 
@@ -396,9 +433,11 @@ class TimeShiftModel(BaseModel):
             for key in self.loss.key_names:
                 loss_numerics[key] += loss[key].item()
 
+        avg_losses = {}
         for key in self.loss.key_names:
-            _avg_numeric_loss = loss_numerics[key] / count_loop
-            self.history["train_loss_" + key].append(_avg_numeric_loss)
+            avg_losses[key] = loss_numerics[key] / count_loop
+
+        return avg_losses
 
     def validate_training(self):
         loss_numerics = {}
@@ -406,28 +445,26 @@ class TimeShiftModel(BaseModel):
             loss_numerics[key] = 0.0
 
         count_loop = 0
-        with torch.no_grad():
-            self.net.eval()
-            for s, s_syn, ts, mask in self.val_dataset:
-                count_loop += 1
+        for s, s_syn, ts, mask in self.val_dataset:
+            count_loop += 1
 
-                # Move tensores para a GPU
-                s = s.to(self.device)
-                s_syn = s_syn.to(self.device)
-                ts = ts.to(self.device)
+            # Move tensores para a GPU
+            s = s.to(self.device)
+            s_syn = s_syn.to(self.device)
+            ts = ts.to(self.device)
 
-                ts_syn = self.net(s, s_syn)
+            ts_syn = self.net(s, s_syn)
 
-                loss = self.loss(ts, ts_syn, mask)
-
-                for key in self.loss.key_names:
-                    loss_numerics[key] += loss[key].item()
+            loss = self.loss(ts, ts_syn, mask)
 
             for key in self.loss.key_names:
-                _avg_numeric_loss = loss_numerics[key] / count_loop
-                self.history["train_loss_" + key].append(_avg_numeric_loss)
+                loss_numerics[key] += loss[key].item()
 
-        return loss_numerics['total'] / count_loop
+        avg_losses = {}
+        for key in self.loss.key_names:
+            avg_losses[key] = loss_numerics[key] / count_loop
+
+        return avg_losses
     
     def run_test(self):
         # Adicionar ts caso rode na versão sintetica
@@ -544,11 +581,6 @@ class MLPWaveletModel(BaseModel):
         )
         self.schedulers = [lr_scheduler]
 
-        self.history = {}
-        for key in self.loss.key_names:
-            self.history["train_loss_" + key] = []
-            self.history["val_loss_" + key] = []
-
     def train_one_epoch(self):
         """
         Executa uma passagem de treino (uma época) sobre `self.train_dataset`.
@@ -618,26 +650,24 @@ class MLPWaveletModel(BaseModel):
             loss_numerics[key] = 0.0
 
         count_loop = 0
-        with torch.no_grad():
-            self.net.eval()
-            for s, w_, _ in self.val_dataset:
-                count_loop += 1
+        for s, w_, _ in self.val_dataset:
+            count_loop += 1
 
-                s = s.to(self.device)
-                w_ = w_.to(self.device)
+            s = s.to(self.device)
+            w_ = w_.to(self.device)
 
-                w = self.net(s)
+            w = self.net(s)
 
-                loss = self.loss(w, w_)
-
-                for key in self.loss.key_names:
-                    loss_numerics[key] += loss[key].item()
+            loss = self.loss(w, w_)
 
             for key in self.loss.key_names:
-                _avg_numeric_loss = loss_numerics[key] / count_loop
-                self.history["val_loss_" + key].append(_avg_numeric_loss)
+                loss_numerics[key] += loss[key].item()
 
-        return loss_numerics["total"] / count_loop
+        avg_losses = {}
+        for key in self.loss.key_names:
+            avg_losses[key] = loss_numerics[key] / count_loop
+
+        return avg_losses
 
     def run_test(self):
         """

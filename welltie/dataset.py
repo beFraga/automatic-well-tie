@@ -6,7 +6,7 @@ from scipy.signal import savgol_filter
 
 import random
 
-from welltie.geophysics import *
+from welltie.geophysics import add_awgn, extract_reflectivity, generate_warped_twt, extract_seismic, extract_impedance, ricker_wavelet, sinc_wavelet, gabor_wavelet, ormsby_wavelet, klauder_wavelet
 from utils import adjust_data_length, rolling_window, despike
 
 import matplotlib.pyplot as plt
@@ -277,7 +277,7 @@ class TimeShiftDataset(BaseDataset):
                 # plt.show()
                 # plt.plot(np.fft.fft(shift))
                 # plt.show()
-                zw_t = np.interp(x=t, xp=Tw, fp=ai[interval]) # TW PRECISA SER DEPTH DOMAIN, SHIFT TEM QUE TER O SHAPE DE T PARA SIMULAR
+                zw_t = np.interp(x=t, xp=Tw, fp=ai[interval])
                 rcw_t = extract_reflectivity(zw_t)
                 rcw_t = np.nan_to_num(rcw_t)
 
